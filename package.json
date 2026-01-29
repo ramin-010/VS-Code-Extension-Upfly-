@@ -1,0 +1,121 @@
+{
+  "name": "upfly-vscode",
+  "displayName": "Upfly",
+  "description": "Auto-convert images to WebP on paste with zero friction",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "upfly.convertFile",
+        "title": "Upfly: Convert to WebP"
+      },
+      {
+        "command": "upfly.init",
+        "title": "Upfly: Create Config File"
+      }
+    ],
+    "configuration": {
+      "title": "Upfly",
+      "properties": {
+        "upfly.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Upfly image processing."
+        },
+        "upfly.watchTargets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/public/**/*.{png,jpg,jpeg}"
+          ],
+          "description": "Glob patterns to watch for new images."
+        },
+        "upfly.storageMode": {
+          "type": "string",
+          "enum": [
+            "in-place",
+            "separate-output",
+            "separate-original"
+          ],
+          "default": "in-place",
+          "description": "Where to store the converted files."
+        },
+        "upfly.outputDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "Directory for converted files (only used in 'separate-output' mode)."
+        },
+        "upfly.originalDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "Directory to move originals to (only used in 'separate-original' mode)."
+        },
+        "upfly.format": {
+          "type": "string",
+          "enum": [
+            "webp",
+            "avif",
+            "jpeg",
+            "png"
+          ],
+          "default": "webp",
+          "description": "Target image format."
+        },
+        "upfly.quality": {
+          "type": "number",
+          "default": 80,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Compression quality (1-100)."
+        },
+        "upfly.maxFileSize": {
+          "type": "number",
+          "default": 20000000,
+          "description": "Max file size in bytes (default 20MB)."
+        },
+        "upfly.inPlaceKeepOriginal": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, original files are kept after conversion in 'in-place' mode."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "18.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.1",
+    "@typescript-eslint/parser": "^6.13.1",
+    "@vscode/test-electron": "^2.3.8",
+    "eslint": "^8.54.0",
+    "glob": "^10.3.10",
+    "mocha": "^10.2.0",
+    "typescript": "^5.3.2"
+  },
+  "dependencies": {
+    "file-type": "^21.3.0",
+    "sharp": "^0.33.0"
+  }
+}
