@@ -22,6 +22,63 @@
       {
         "command": "upfly.init",
         "title": "Upfly: Create Config File"
+      },
+      {
+        "command": "upfly.convertToWebp",
+        "title": "Convert to WebP"
+      },
+      {
+        "command": "upfly.convertToAvif",
+        "title": "Convert to AVIF"
+      },
+      {
+        "command": "upfly.convertToJpeg",
+        "title": "Convert to JPEG"
+      },
+      {
+        "command": "upfly.convertToPng",
+        "title": "Convert to PNG"
+      },
+      {
+        "command": "upfly.compress",
+        "title": "Compress (Same Format)"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "submenu": "upfly.submenu",
+          "group": "upfly",
+          "when": "resourceExtname == .png || resourceExtname == .jpg || resourceExtname == .jpeg || resourceExtname == .webp || resourceExtname == .avif || resourceExtname == .gif || resourceExtname == .tiff"
+        }
+      ],
+      "upfly.submenu": [
+        {
+          "command": "upfly.convertToWebp",
+          "group": "1_convert"
+        },
+        {
+          "command": "upfly.convertToAvif",
+          "group": "1_convert"
+        },
+        {
+          "command": "upfly.convertToJpeg",
+          "group": "1_convert"
+        },
+        {
+          "command": "upfly.convertToPng",
+          "group": "1_convert"
+        },
+        {
+          "command": "upfly.compress",
+          "group": "2_compress"
+        }
+      ]
+    },
+    "submenus": [
+      {
+        "id": "upfly.submenu",
+        "label": "Upfly"
       }
     ],
     "configuration": {

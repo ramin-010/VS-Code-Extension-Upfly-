@@ -11,9 +11,11 @@ interface ConversionOptions {
     outputDirectory?: string;
     originalDirectory?: string;
     inPlaceKeepOriginal?: boolean;
+    isCompression?: boolean;
 }
 
 export class ConverterService {
+    private static readonly MAX_SUFFIX = 100;
     
     private static getTempDir(): string {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -38,6 +40,25 @@ export class ConverterService {
         }
     }
 
+    private static getUniqueOutputPath(dir: string, baseName: string, ext: string, isCompression: boolean): string {
+        const suffix = isCompression ? '_compressed' : '';
+        let candidate = path.join(dir, `${baseName}${suffix}.${ext}`);
+        
+        if (!fs.existsSync(candidate)) {
+            return candidate;
+        }
+
+        for (let i = 1; i <= this.MAX_SUFFIX; i++) {
+            const numberedSuffix = isCompression ? `_compressed${i}` : `_copy${i}`;
+            candidate = path.join(dir, `${baseName}${numberedSuffix}.${ext}`);
+            if (!fs.existsSync(candidate)) {
+                return candidate;
+            }
+        }
+
+        throw new Error(`Too many copies exist for ${baseName}.${ext}`);
+    }
+
     static async isValidImage(filePath: string): Promise<boolean> {
         try {
             const { fileTypeFromFile } = await eval('import("file-type")');
@@ -55,7 +76,9 @@ export class ConverterService {
         const fileDir = path.dirname(filePath);
         const fileExt = path.extname(filePath).toLowerCase().replace('.', '');
         const fileName = path.basename(filePath, path.extname(filePath));
-        const isSameFormat = fileExt === options.format;
+        const normalizedInputExt = fileExt === 'jpg' ? 'jpeg' : fileExt;
+        const isSameFormat = normalizedInputExt === options.format;
+        const isCompression = options.isCompression ?? false;
 
         const tempDir = this.getTempDir();
         const tempFileName = `${fileName}_${Date.now()}.${options.format}`;
@@ -71,7 +94,14 @@ export class ConverterService {
             }
         }
 
-        const finalOutputPath = path.join(finalOutputDir, `${fileName}.${options.format}`);
+        let finalOutputPath: string;
+        try {
+            finalOutputPath = this.getUniqueOutputPath(finalOutputDir, fileName, options.format, isCompression);
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`Upfly: ${e.message}`);
+            return;
+        }
+
         ProcessingCache.add(finalOutputPath);
 
         try {
@@ -98,24 +128,24 @@ export class ConverterService {
                 }
             } 
             else if (options.storageMode === 'in-place') {
-                if (isSameFormat) {
+                fs.renameSync(tempPath, finalOutputPath);
+
+                if (isSameFormat && !isCompression) {
                     if (options.inPlaceKeepOriginal) {
-                        const originalBackupPath = path.join(fileDir, `${fileName}_original.${fileExt}`);
-                        ProcessingCache.add(originalBackupPath);
-                        fs.renameSync(filePath, originalBackupPath);
-                    } else {
+                        const originalBackupPath = this.getUniqueOutputPath(fileDir, fileName, fileExt, false);
+                        const backupWithOriginalSuffix = originalBackupPath.replace(`.${fileExt}`, `_original.${fileExt}`);
+                        ProcessingCache.add(backupWithOriginalSuffix);
+                        fs.renameSync(filePath, backupWithOriginalSuffix);
+                    } else if (filePath !== finalOutputPath) {
                         fs.unlinkSync(filePath);
                     }
-                    fs.renameSync(tempPath, finalOutputPath);
-                } else {
-                    fs.renameSync(tempPath, finalOutputPath);
-                    if (!options.inPlaceKeepOriginal) {
-                        fs.unlinkSync(filePath);
-                    }
+                } else if (!options.inPlaceKeepOriginal && filePath !== finalOutputPath) {
+                    fs.unlinkSync(filePath);
                 }
             }
 
-            vscode.window.showInformationMessage(`Upfly: Converted ${fileName} to ${options.format.toUpperCase()}`);
+            const outputFileName = path.basename(finalOutputPath);
+            vscode.window.showInformationMessage(`Upfly: Converted ${fileName} → ${outputFileName}`);
 
         } catch (error: any) {
             if (fs.existsSync(tempPath)) {
