@@ -170,6 +170,12 @@ export class WatcherService {
 
     private async triggerProcessing(filePath: string) {
         const config = ConfigService.getInstance();
+
+        // Skip processing if config is invalid (allow normal paste)
+        if (!config.isConfigValid) {
+            console.log('Upfly: Config is invalid, skipping auto-conversion. File will be pasted normally.');
+            return;
+        }
         
         globalQueue.add(async () => {
             try {

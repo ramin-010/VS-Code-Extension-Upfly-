@@ -111,7 +111,11 @@ export class ConverterService {
         ProcessingCache.add(finalOutputPath);
 
         try {
-            await sharp(filePath)
+            // Read file into buffer first to prevent Sharp from locking the file
+            // This fixes EBUSY issues with WebP files on Windows
+            const inputBuffer = fs.readFileSync(filePath);
+            
+            await sharp(inputBuffer)
                 .toFormat(options.format as keyof sharp.FormatEnum, { quality: options.quality })
                 .toFile(tempPath);
 
