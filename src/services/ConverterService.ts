@@ -96,7 +96,13 @@ export class ConverterService {
 
         let finalOutputPath: string;
         try {
-            finalOutputPath = this.getUniqueOutputPath(finalOutputDir, fileName, options.format, isCompression);
+            // For in-place optimization (same format, not compression cmd), we WANT to target the input file.
+            // We do NOT want getUniqueOutputPath to give us 'image_copy1.png'.
+            if (options.storageMode === 'in-place' && isSameFormat && !isCompression) {
+                finalOutputPath = filePath;
+            } else {
+                finalOutputPath = this.getUniqueOutputPath(finalOutputDir, fileName, options.format, isCompression);
+            }
         } catch (e: any) {
             vscode.window.showErrorMessage(`Upfly: ${e.message}`);
             return;
@@ -128,19 +134,25 @@ export class ConverterService {
                 }
             } 
             else if (options.storageMode === 'in-place') {
-                fs.renameSync(tempPath, finalOutputPath);
-
                 if (isSameFormat && !isCompression) {
                     if (options.inPlaceKeepOriginal) {
-                        const originalBackupPath = this.getUniqueOutputPath(fileDir, fileName, fileExt, false);
-                        const backupWithOriginalSuffix = originalBackupPath.replace(`.${fileExt}`, `_original.${fileExt}`);
-                        ProcessingCache.add(backupWithOriginalSuffix);
-                        fs.renameSync(filePath, backupWithOriginalSuffix);
-                    } else if (filePath !== finalOutputPath) {
+                        // Rename Original -> Backup
+                        // image.png -> image_original.png (or _copy1 if exists)
+                        const originalBackupPath = this.getUniqueOutputPath(fileDir, `${fileName}_original`, fileExt, false);
+                        ProcessingCache.add(originalBackupPath);
+                        fs.renameSync(filePath, originalBackupPath);
+                    } else {
+                        // Delete Original
                         fs.unlinkSync(filePath);
                     }
-                } else if (!options.inPlaceKeepOriginal && filePath !== finalOutputPath) {
-                    fs.unlinkSync(filePath);
+                    // Rename Temp -> Original (image.png)
+                    fs.renameSync(tempPath, finalOutputPath);
+                } else {
+                    // Normal conversion (png -> webp) OR Compression command
+                    fs.renameSync(tempPath, finalOutputPath);
+                    if (!options.inPlaceKeepOriginal && filePath !== finalOutputPath) {
+                        fs.unlinkSync(filePath);
+                    }
                 }
             }
 

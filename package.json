@@ -14,6 +14,14 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "languages": [
+      {
+        "id": "jsonc",
+        "filenames": [
+          "upfly.json"
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "upfly.convertFile",
@@ -95,9 +103,9 @@
             "type": "string"
           },
           "default": [
-            "**/public/**/*.{png,jpg,jpeg}"
+            "public"
           ],
-          "description": "Glob patterns to watch for new images."
+          "description": "Folders to watch for new images (e.g., 'public', 'assets'). Automatically watches all subdirectories."
         },
         "upfly.storageMode": {
           "type": "string",
@@ -173,6 +181,7 @@
   },
   "dependencies": {
     "file-type": "^21.3.0",
+    "jsonc-parser": "^3.3.1",
     "sharp": "^0.33.0"
   }
 }

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { parse } from 'jsonc-parser';
 
 export interface UpflyConfig {
     enabled: boolean;
@@ -16,7 +17,7 @@ export interface UpflyConfig {
 
 const DEFAULT_CONFIG: UpflyConfig = {
     enabled: true,
-    watchTargets: ['**/public/**/*.{png,jpg,jpeg}'],
+    watchTargets: ['public'],
     storageMode: 'in-place',
     format: 'webp',
     quality: 80,
@@ -80,7 +81,7 @@ export class ConfigService {
         if (fs.existsSync(configPath)) {
             try {
                 const content = fs.readFileSync(configPath, 'utf8');
-                return JSON.parse(content);
+                return parse(content);
             } catch (e) {
                 console.error('Failed to parse upfly.json', e);
             }
@@ -102,8 +103,35 @@ export class ConfigService {
             return;
         }
 
+        const configTemplate = `{
+  "enabled": true,      // Enable or disable Upfly image processing
+
+  "watchTargets": ["public"],   // Examples: "public", "src/assets", "images"
+
+  "format": "webp",       // Options: "webp", "avif", "jpeg", "png"
+
+  "quality": 80,        // Compression quality (1-100, higher = better quality, larger file)
+
+  // Where to store converted files
+  // - in-place: Save converted file in same folder as original
+  // - separate-output: Save converted file to outputDirectory
+  // - separate-original: Move original to originalDirectory, keep converted in place
+  "storageMode": "in-place",
+
+  "inPlaceKeepOriginal": false,     // Keep original file after in-place conversion (only applies to "in-place" mode)
+
+  "maxFileSize": 20000000,       // Maximum file size to process in bytes (default: 20MB)
+
+  // --- Optional Fields (uncomment to use) ---
+
+  // "outputDirectory": "./converted",       // Directory for converted files (required for "separate-output" mode)
+
+  // "originalDirectory": "./originals",     // Directory to move originals (required for "separate-original" mode)
+}
+`;
+
         try {
-            fs.writeFileSync(configPath, JSON.stringify(DEFAULT_CONFIG, null, 2));
+            fs.writeFileSync(configPath, configTemplate);
             const doc = await vscode.workspace.openTextDocument(configPath);
             await vscode.window.showTextDocument(doc);
             vscode.window.showInformationMessage('Upfly: Created upfly.json');
