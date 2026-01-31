@@ -10,6 +10,15 @@ export interface WatchTarget {
     quality?: number;  // Default: 80
 }
 
+// Cloud upload configuration
+export interface CloudUploadConfig {
+    enabled: boolean;
+    watchTargets: string[];  // Paths that trigger cloud upload (must exist in root watchTargets)
+    provider: 's3' | 'cloudinary' | 'gcs';
+    config: Record<string, string>;  // Provider-specific config (supports ${env:VAR})
+    deleteLocalAfterUpload: boolean;
+}
+
 export interface UpflyConfig {
     enabled: boolean;
     watchTargets: WatchTarget[];
@@ -18,6 +27,7 @@ export interface UpflyConfig {
     originalDirectory?: string;
     maxFileSize: number;
     inPlaceKeepOriginal: boolean;
+    cloudUpload?: CloudUploadConfig;
 }
 
 const DEFAULT_WATCH_TARGET: WatchTarget = {
@@ -74,7 +84,12 @@ export class ConfigService {
      * into a consistent WatchTarget[] format.
      */
     private normalizeTargets(raw: any): WatchTarget[] {
-        if (!Array.isArray(raw) || raw.length === 0) {
+        // If explicitly empty array, return empty (for cloud-only mode)
+        if (Array.isArray(raw) && raw.length === 0) {
+            return [];
+        }
+        // If undefined/null, use defaults
+        if (!Array.isArray(raw)) {
             return DEFAULT_CONFIG.watchTargets;
         }
 
@@ -97,7 +112,11 @@ export class ConfigService {
 
     private buildTargetCache() {
         const config = this.readLocalConfig();
-        const rawTargets = config?.watchTargets || this.getVSCodeWatchTargets() || DEFAULT_CONFIG.watchTargets;
+        // If config exists, use its watchTargets (even if empty)
+        // Only fallback to VS Code settings if no config file
+        const rawTargets = config 
+            ? (config.watchTargets ?? [])  // upfly.config.json exists - use its value (even if empty)
+            : (this.getVSCodeWatchTargets() || DEFAULT_CONFIG.watchTargets); // No config file - use VS Code settings
         const targets = this.normalizeTargets(rawTargets);
         
         // Sort by path length descending (longest/most specific first)
@@ -136,6 +155,100 @@ export class ConfigService {
         // Fallback to first target or default
         const fallback = this.cachedTargets[0] || DEFAULT_WATCH_TARGET;
         return { format: fallback.format, quality: fallback.quality ?? 80 };
+    }
+
+    // ========== CLOUD UPLOAD HELPERS ==========
+
+    /**
+     * Check if a file path should trigger cloud upload
+     * Path must be in cloudUpload.watchTargets (independent of root watchTargets)
+     */
+    public isCloudTarget(filePath: string): boolean {
+        const cloudConfig = this.get<CloudUploadConfig | undefined>('cloudUpload');
+        if (!cloudConfig?.enabled || !cloudConfig.watchTargets?.length) {
+            return false;
+        }
+
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) return false;
+
+        const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
+
+        // Check if path matches any cloudUpload.watchTargets
+        for (const target of cloudConfig.watchTargets) {
+            const normalizedTarget = target.replace(/\\/g, '/');
+            if (relativePath.startsWith(normalizedTarget + '/') || relativePath === normalizedTarget || relativePath.startsWith(normalizedTarget)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if a file path should be converted (exists in root watchTargets)
+     */
+    public shouldConvert(filePath: string): boolean {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) return false;
+
+        const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
+        
+        // Check if path matches any root watchTargets
+        for (const target of this.cachedTargets) {
+            const normalizedTarget = target.path.replace(/\\/g, '/');
+            if (relativePath.startsWith(normalizedTarget + '/') || relativePath === normalizedTarget || relativePath.startsWith(normalizedTarget)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Get cloud watch targets (for WatcherService to create watchers)
+     */
+    public getCloudWatchTargets(): string[] {
+        const cloudConfig = this.get<CloudUploadConfig | undefined>('cloudUpload');
+        if (!cloudConfig?.enabled || !cloudConfig.watchTargets?.length) {
+            return [];
+        }
+        return cloudConfig.watchTargets;
+    }
+
+    /**
+     * Get resolved cloud config with env variables replaced
+     */
+    public getCloudConfig(): CloudUploadConfig | null {
+        const cloudConfig = this.get<CloudUploadConfig | undefined>('cloudUpload');
+        if (!cloudConfig?.enabled) return null;
+
+        // Resolve env variables in config
+        const resolvedConfig = { ...cloudConfig.config };
+        for (const [key, value] of Object.entries(resolvedConfig)) {
+            resolvedConfig[key] = this.resolveEnvVars(value);
+        }
+
+        return {
+            ...cloudConfig,
+            config: resolvedConfig
+        };
+    }
+
+    /**
+     * Resolve ${env:VAR_NAME} patterns to actual environment values
+     */
+    private resolveEnvVars(value: string): string {
+        if (typeof value !== 'string') return value;
+        
+        return value.replace(/\$\{env:([^}]+)\}/g, (match, varName) => {
+            const envValue = process.env[varName];
+            if (envValue === undefined) {
+                console.warn(`Upfly: Environment variable ${varName} not found`);
+                return match; // Keep original if not found
+            }
+            return envValue;
+        });
     }
 
     private triggerConfigUpdate() {
@@ -219,11 +332,16 @@ export class ConfigService {
 
         // Validate `watchTargets` - must be array of { path, format, quality? }
         const validFormats = ['webp', 'png', 'jpeg', 'avif'];
+        const hasCloudTargets = config.cloudUpload?.enabled && 
+                                Array.isArray(config.cloudUpload?.watchTargets) && 
+                                config.cloudUpload.watchTargets.length > 0;
+        
         if (config.watchTargets !== undefined) {
             if (!Array.isArray(config.watchTargets)) {
                 errors.push(`"watchTargets" must be an array.`);
-            } else if (config.watchTargets.length === 0) {
-                errors.push(`"watchTargets" cannot be empty. Add at least one target.`);
+            } else if (config.watchTargets.length === 0 && !hasCloudTargets) {
+                // Only error if BOTH root and cloud watchTargets are empty
+                errors.push(`"watchTargets" cannot be empty (unless cloudUpload.watchTargets is set).`);
             } else {
                 config.watchTargets.forEach((target: any, index: number) => {
                     const prefix = `watchTargets[${index}]`;
@@ -291,6 +409,45 @@ export class ConfigService {
             errors.push(`"storageMode" is "separate-original" but "originalDirectory" is not set.`);
         }
 
+        // Validate `cloudUpload` (if present)
+        if (config.cloudUpload !== undefined) {
+            const cloud = config.cloudUpload;
+            
+            if (typeof cloud !== 'object' || cloud === null) {
+                errors.push(`"cloudUpload" must be an object.`);
+            } else {
+                // Validate enabled
+                if (cloud.enabled !== undefined && typeof cloud.enabled !== 'boolean') {
+                    errors.push(`"cloudUpload.enabled" must be true or false.`);
+                }
+
+                // Validate provider
+                const validProviders = ['s3', 'cloudinary', 'gcs'];
+                if (cloud.enabled && !validProviders.includes(cloud.provider)) {
+                    errors.push(`"cloudUpload.provider" must be one of: ${validProviders.join(', ')}`);
+                }
+
+                // Validate watchTargets
+                if (cloud.enabled) {
+                    if (!Array.isArray(cloud.watchTargets) || cloud.watchTargets.length === 0) {
+                        errors.push(`"cloudUpload.watchTargets" must be a non-empty array of paths.`);
+                    }
+                    // Note: cloud watchTargets are independent of root watchTargets
+                    // They can be cloud-only (no conversion) or overlap with root (convert + upload)
+                }
+
+                // Validate config object
+                if (cloud.enabled && (!cloud.config || typeof cloud.config !== 'object')) {
+                    errors.push(`"cloudUpload.config" is required when cloud upload is enabled.`);
+                }
+
+                // Validate deleteLocalAfterUpload
+                if (cloud.deleteLocalAfterUpload !== undefined && typeof cloud.deleteLocalAfterUpload !== 'boolean') {
+                    errors.push(`"cloudUpload.deleteLocalAfterUpload" must be true or false.`);
+                }
+            }
+        }
+
         // Store results
         this._lastValidationErrors = errors;
         this._isConfigValid = errors.length === 0;
@@ -351,10 +508,24 @@ export class ConfigService {
 
   "inPlaceKeepOriginal": false,     // Keep original file after conversion
 
-  // --- Optional Fields (uncomment to use) ---
+  "outputDirectory": "./converted",       // For "separate-output" mode
+  "originalDirectory": "./originals",     // For "separate-original" mode
 
-  // "outputDirectory": "./converted",       // For "separate-output" mode
-  // "originalDirectory": "./originals",     // For "separate-original" mode
+  
+  // --- Cloud Upload (optional) ---
+  // Uncomment to enable direct cloud uploads
+  // "cloudUpload": {
+  //   "enabled": true,
+  //   "watchTargets": ["public"],    // Must also exist in root watchTargets
+  //   "provider": "s3",              // "s3" | "cloudinary" | "gcs"
+  //   "config": {
+  //     "region": "\${env:AWS_REGION}",
+  //     "bucket": "\${env:AWS_BUCKET}",
+  //     "accessKeyId": "\${env:AWS_ACCESS_KEY}",
+  //     "secretAccessKey": "\${env:AWS_SECRET_KEY}"
+  //   },
+  //   "deleteLocalAfterUpload": false
+  // },
 
   "maxFileSize": 20000000       // Maximum file size in bytes (default: 20MB)
 }

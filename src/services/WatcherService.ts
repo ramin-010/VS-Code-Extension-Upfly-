@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as path from 'path';
 import { ConverterService } from './ConverterService';
 import { globalQueue } from './QueueService';
 import { ProcessingCache } from './ProcessingCache';
 import { ConfigService } from './ConfigService';
+import { CloudService } from './CloudService';
 
 export class WatcherService {
     private watchers: vscode.FileSystemWatcher[] = [];
@@ -11,6 +13,9 @@ export class WatcherService {
     
     // Supported extensions for Glob generation
     private static readonly EXTENSIONS_GLOB = '{png,jpg,jpeg,webp,avif,tiff,gif}';
+
+    // Debounced notification for cloud uploads
+    private static uploadDebounceTimer: NodeJS.Timeout | null = null;
 
     constructor() {}
 
@@ -24,8 +29,15 @@ export class WatcherService {
         if (!enabled) return;
 
         // Extract paths - handle both string[] (VS Code settings) and WatchTarget[] (config file)
-        const paths = this.extractPaths(rawWatchTargets);
-        const optimizedPatterns = this.optimizeWatchTargets(paths);
+        const rootPaths = this.extractPaths(rawWatchTargets);
+        
+        // Also get cloud watch targets (for cloud-only folders)
+        const cloudPaths = config.getCloudWatchTargets();
+        
+        // Merge paths (Set removes duplicates)
+        const allPaths = [...new Set([...rootPaths, ...cloudPaths])];
+        
+        const optimizedPatterns = this.optimizeWatchTargets(allPaths);
 
         optimizedPatterns.forEach(pattern => {
             console.log(`Upfly: Watching ${pattern}`);
@@ -194,10 +206,20 @@ export class WatcherService {
         // Skip processing if config is invalid - show error popup (JIT)
         if (!config.isConfigValid) {
             console.log('Upfly: Config is invalid, skipping auto-conversion. File will be pasted normally.');
-            config.showConfigErrors(); // Show error only when user tries to use the feature
+            config.showConfigErrors();
             return;
         }
+
+        // Check both flags independently
+        const isCloudTarget = config.isCloudTarget(filePath);
+        const shouldConvert = config.shouldConvert(filePath);
         
+        // Neither? Shouldn't happen with proper watcher setup, but just in case
+        if (!isCloudTarget && !shouldConvert) {
+            console.log('Upfly: File not in any watch target, skipping.');
+            return;
+        }
+
         globalQueue.add(async () => {
             try {
                 const isValid = await ConverterService.isValidImage(filePath);
@@ -206,17 +228,25 @@ export class WatcherService {
                     return;
                 }
 
-                // Get format/quality specific to this file's path
-                const { format, quality } = config.getOptionsForPath(filePath);
-
-                await ConverterService.convertFile(filePath, {
-                    format,
-                    quality,
-                    storageMode: config.get('storageMode'),
-                    outputDirectory: config.get('outputDirectory'),
-                    originalDirectory: config.get('originalDirectory'),
-                    inPlaceKeepOriginal: config.get('inPlaceKeepOriginal')
-                });
+                if (isCloudTarget && shouldConvert) {
+                    // BOTH: Convert then upload
+                    const { format, quality } = config.getOptionsForPath(filePath);
+                    await this.processCloudUpload(filePath, format, quality, config);
+                } else if (isCloudTarget && !shouldConvert) {
+                    // CLOUD ONLY: Upload original without conversion
+                    await this.processCloudUploadRaw(filePath, config);
+                } else {
+                    // LOCAL ONLY: Normal conversion (unchanged behavior)
+                    const { format, quality } = config.getOptionsForPath(filePath);
+                    await ConverterService.convertFile(filePath, {
+                        format,
+                        quality,
+                        storageMode: config.get('storageMode'),
+                        outputDirectory: config.get('outputDirectory'),
+                        originalDirectory: config.get('originalDirectory'),
+                        inPlaceKeepOriginal: config.get('inPlaceKeepOriginal')
+                    });
+                }
 
             } catch (err) {
                 console.error('Error processing file:', err);
@@ -224,8 +254,136 @@ export class WatcherService {
         });
     }
 
+    /**
+     * CLOUD MODE: Convert in memory and upload directly to cloud
+     */
+    private async processCloudUpload(
+        filePath: string,
+        format: 'webp' | 'png' | 'jpeg' | 'avif',
+        quality: number,
+        config: ConfigService
+    ): Promise<void> {
+        const cloudConfig = config.getCloudConfig();
+        if (!cloudConfig) {
+            console.log('Upfly: Cloud config not available, skipping upload');
+            return;
+        }
+
+        // Convert to buffer (no disk write)
+        const { buffer } = await ConverterService.convertToBuffer(filePath, format, quality);
+        const originalFilename = path.basename(filePath);
+
+        // Calculate folder relative to workspace root
+        let relativeFolder: string | undefined;
+        if (vscode.workspace.workspaceFolders) {
+            const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+            const relativePath = path.relative(workspaceRoot, filePath);
+            relativeFolder = path.dirname(relativePath).replace(/\\/g, '/');
+            if (relativeFolder === '.') relativeFolder = undefined;
+        }
+
+        // Notify user (debounced)
+        this.notifyUploadStart();
+
+        // Queue for cloud upload
+        CloudService.queueUpload({
+            buffer,
+            localPath: filePath,
+            convertedFormat: format,
+            originalFilename,
+            folder: relativeFolder,
+            cloudConfig: {
+                provider: cloudConfig.provider,
+                config: cloudConfig.config,
+                deleteLocalAfterUpload: cloudConfig.deleteLocalAfterUpload
+            },
+            onComplete: () => {
+                // Delete original after successful upload if configured
+                if (cloudConfig.deleteLocalAfterUpload) {
+                    try {
+                        fs.unlinkSync(filePath);
+                        console.log(`Upfly: Deleted original after upload: ${filePath}`);
+                    } catch (e) {
+                        console.error('Upfly: Failed to delete original', e);
+                    }
+                }
+            }
+        });
+
+        console.log(`Upfly Cloud: Queued ${originalFilename} for upload`);
+    }
+
+    /**
+     * CLOUD-ONLY MODE: Upload original file without conversion
+     */
+    private async processCloudUploadRaw(
+        filePath: string,
+        config: ConfigService
+    ): Promise<void> {
+        const cloudConfig = config.getCloudConfig();
+        if (!cloudConfig) {
+            console.log('Upfly: Cloud config not available, skipping upload');
+            return;
+        }
+
+        // Read original file as buffer (no conversion)
+        const buffer = fs.readFileSync(filePath);
+        const originalFilename = path.basename(filePath);
+        const ext = path.extname(filePath).slice(1).toLowerCase(); // e.g. 'png'
+
+        // Calculate folder relative to workspace root
+        let relativeFolder: string | undefined;
+        if (vscode.workspace.workspaceFolders) {
+            const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+            const relativePath = path.relative(workspaceRoot, filePath);
+            relativeFolder = path.dirname(relativePath).replace(/\\/g, '/');
+            if (relativeFolder === '.') relativeFolder = undefined;
+        }
+
+        // Notify user (debounced)
+        this.notifyUploadStart();
+
+        // Queue for cloud upload
+        CloudService.queueUpload({
+            buffer,
+            localPath: filePath,
+            convertedFormat: ext, // Original format
+            originalFilename,
+            folder: relativeFolder,
+            cloudConfig: {
+                provider: cloudConfig.provider,
+                config: cloudConfig.config,
+                deleteLocalAfterUpload: cloudConfig.deleteLocalAfterUpload
+            },
+            onComplete: () => {
+                if (cloudConfig.deleteLocalAfterUpload) {
+                    try {
+                        fs.unlinkSync(filePath);
+                        console.log(`Upfly: Deleted original after upload: ${filePath}`);
+                    } catch (e) {
+                        console.error('Upfly: Failed to delete original', e);
+                    }
+                }
+            }
+        });
+
+        console.log(`Upfly Cloud: Queued ${originalFilename} for RAW upload (no conversion)`);
+    }
+
+    private notifyUploadStart() {
+        if (WatcherService.uploadDebounceTimer) {
+            clearTimeout(WatcherService.uploadDebounceTimer);
+        }
+        WatcherService.uploadDebounceTimer = setTimeout(() => {
+            vscode.window.showInformationMessage('Upfly: Uploading images to cloud...');
+        }, 3000); // 1s delay to group batch pastes
+    }
+
     public dispose() {
         this.watchers.forEach(w => w.dispose());
         this.watchers = [];
+        if (WatcherService.uploadDebounceTimer) {
+            clearTimeout(WatcherService.uploadDebounceTimer);
+        }
     }
 }

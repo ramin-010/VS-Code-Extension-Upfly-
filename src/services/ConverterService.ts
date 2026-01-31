@@ -72,6 +72,27 @@ export class ConverterService {
         }
     }
 
+    /**
+     * Convert image to buffer (for cloud uploads - no disk write)
+     */
+    static async convertToBuffer(
+        filePath: string, 
+        format: 'webp' | 'png' | 'jpeg' | 'avif',
+        quality: number
+    ): Promise<{ buffer: Buffer; format: string; size: number }> {
+        const inputBuffer = fs.readFileSync(filePath);
+        
+        const outputBuffer = await sharp(inputBuffer)
+            .toFormat(format as keyof sharp.FormatEnum, { quality })
+            .toBuffer();
+
+        return {
+            buffer: outputBuffer,
+            format,
+            size: outputBuffer.length
+        };
+    }
+
     static async convertFile(filePath: string, options: ConversionOptions) {
         const fileDir = path.dirname(filePath);
         const fileExt = path.extname(filePath).toLowerCase().replace('.', '');
