@@ -494,35 +494,36 @@ export class ConfigService {
         const configTemplate = `{
   "enabled": true,      // Enable or disable Upfly image processing
 
-  // Each folder can have its own format and quality settings
-  // Subdirectories inherit parent settings unless overridden
+  // Folders to watch for new images - each can have its own format and quality
+  // Images dropped into these folders will be automatically converted
   "watchTargets": [
     { "path": "public", "format": "webp", "quality": 80 }
   ],
 
-  // Where to store converted files
-  // - in-place: Save converted file in same folder as original
-  // - separate-output: Save converted file to outputDirectory
-  // - separate-original: Move original to originalDirectory, keep converted in place
+  // Storage mode for converted files:
+  // - "in-place": Replace original with converted file in same location
+  // - "separate-output": Keep original, save converted to outputDirectory
+  // - "separate-original": Move original to originalDirectory, keep converted in place
   "storageMode": "in-place",
 
-  "inPlaceKeepOriginal": false,     // Keep original file after conversion
+  "inPlaceKeepOriginal": false,     // When true, keeps original alongside converted file
 
-  "outputDirectory": "./converted",       // For "separate-output" mode
-  "originalDirectory": "./originals",     // For "separate-original" mode
+  "outputDirectory": "./converted",       // Used and applicable only with "separate-output" mode
+  "originalDirectory": "./originals",     // Usedand applicable only with "separate-original" mode
 
   
   // --- Cloud Upload (optional) ---
-  // Uncomment to enable direct cloud uploads
+  // Automatically upload converted images to cloud storage
+  // Supports: "cloudinary" | "s3" | "gcs"
   // "cloudUpload": {
   //   "enabled": true,
-  //   "watchTargets": ["public"],    // Must also exist in root watchTargets
-  //   "provider": "s3",              // "s3" | "cloudinary" | "gcs"
+  //   "watchTargets": ["public"],    // Folders to upload (If same directory doesn;t exist in the root watchTargets, it will not go through conversion and upload the original file)
+  //   "provider": "cloudinary",
   //   "config": {
-  //     "region": "\${env:AWS_REGION}",
-  //     "bucket": "\${env:AWS_BUCKET}",
-  //     "accessKeyId": "\${env:AWS_ACCESS_KEY}",
-  //     "secretAccessKey": "\${env:AWS_SECRET_KEY}"
+  //     "cloudName": "\${env:CLOUDINARY_CLOUD_NAME}",
+  //     "apiKey": "\${env:CLOUDINARY_API_KEY}",
+  //     "apiSecret": "\${env:CLOUDINARY_API_SECRET}",
+  //     "folder": "uploads"           // Optional: folder path in Cloudinary
   //   },
   //   "deleteLocalAfterUpload": false
   // },

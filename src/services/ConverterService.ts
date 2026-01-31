@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import * as sharp from 'sharp';
+import sharp from 'sharp';
 import { ProcessingCache } from './ProcessingCache';
 
 interface ConversionOptions {
@@ -82,8 +82,8 @@ export class ConverterService {
     ): Promise<{ buffer: Buffer; format: string; size: number }> {
         const inputBuffer = fs.readFileSync(filePath);
         
-        const outputBuffer = await sharp(inputBuffer)
-            .toFormat(format as keyof sharp.FormatEnum, { quality })
+            const outputBuffer = await sharp(inputBuffer)
+            .toFormat(format, { quality })
             .toBuffer();
 
         return {
@@ -137,7 +137,7 @@ export class ConverterService {
             const inputBuffer = fs.readFileSync(filePath);
             
             await sharp(inputBuffer)
-                .toFormat(options.format as keyof sharp.FormatEnum, { quality: options.quality })
+                .toFormat(options.format, { quality: options.quality })
                 .toFile(tempPath);
 
             if (options.storageMode === 'separate-output') {
