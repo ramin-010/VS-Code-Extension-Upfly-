@@ -3,24 +3,33 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parse } from 'jsonc-parser';
 
+// Per-folder watch configuration
+export interface WatchTarget {
+    path: string;
+    format: 'webp' | 'png' | 'jpeg' | 'avif';
+    quality?: number;  // Default: 80
+}
+
 export interface UpflyConfig {
     enabled: boolean;
-    watchTargets: string[];
+    watchTargets: WatchTarget[];
     storageMode: 'in-place' | 'separate-output' | 'separate-original';
     outputDirectory?: string;
     originalDirectory?: string;
-    format: 'webp' | 'png' | 'jpeg' | 'avif';
-    quality: number;
     maxFileSize: number;
     inPlaceKeepOriginal: boolean;
 }
 
+const DEFAULT_WATCH_TARGET: WatchTarget = {
+    path: 'public',
+    format: 'webp',
+    quality: 80
+};
+
 const DEFAULT_CONFIG: UpflyConfig = {
     enabled: true,
-    watchTargets: ['public'],
+    watchTargets: [DEFAULT_WATCH_TARGET],
     storageMode: 'in-place',
-    format: 'webp',
-    quality: 80,
     maxFileSize: 20000000,
     inPlaceKeepOriginal: false
 };
@@ -30,6 +39,9 @@ export class ConfigService {
     private configWatcher?: vscode.FileSystemWatcher;
     private _onDidChangeConfig = new vscode.EventEmitter<void>();
     public readonly onDidChangeConfig = this._onDidChangeConfig.event;
+
+    // Cached targets sorted by path length (longest first) for efficient lookup
+    private cachedTargets: WatchTarget[] = [];
 
     private constructor() {}
 
@@ -52,8 +64,78 @@ export class ConfigService {
             this.configWatcher.onDidDelete(() => this.triggerConfigUpdate());
         }
         
-        // Validate config on initial load
+        // Build cache and validate on initial load
+        this.buildTargetCache();
         this.validateConfig();
+    }
+
+    /**
+     * Normalize targets from either string[] (VS Code settings) or WatchTarget[] (upfly.config.json)
+     * into a consistent WatchTarget[] format.
+     */
+    private normalizeTargets(raw: any): WatchTarget[] {
+        if (!Array.isArray(raw) || raw.length === 0) {
+            return DEFAULT_CONFIG.watchTargets;
+        }
+
+        return raw.map((item: any) => {
+            if (typeof item === 'string') {
+                // Legacy string format from VS Code settings
+                return { path: item, format: 'webp' as const, quality: 80 };
+            } else if (typeof item === 'object' && item !== null && item.path) {
+                // New object format
+                return {
+                    path: item.path,
+                    format: item.format || 'webp',
+                    quality: item.quality ?? 80
+                };
+            }
+            // Invalid item, use default
+            return DEFAULT_WATCH_TARGET;
+        });
+    }
+
+    private buildTargetCache() {
+        const config = this.readLocalConfig();
+        const rawTargets = config?.watchTargets || this.getVSCodeWatchTargets() || DEFAULT_CONFIG.watchTargets;
+        const targets = this.normalizeTargets(rawTargets);
+        
+        // Sort by path length descending (longest/most specific first)
+        this.cachedTargets = [...targets].sort((a, b) => b.path.length - a.path.length);
+    }
+
+    private getVSCodeWatchTargets(): any {
+        const vscodeConfig = vscode.workspace.getConfiguration('upfly');
+        return vscodeConfig.get('watchTargets');
+    }
+
+    /**
+     * Get format and quality for a specific file path.
+     * Uses cached targets for zero config-read overhead.
+     */
+    public getOptionsForPath(filePath: string): { format: 'webp' | 'png' | 'jpeg' | 'avif', quality: number } {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+            return { format: 'webp', quality: 80 };
+        }
+
+        // Get relative path and normalize slashes
+        const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
+
+        // Find first match (longest path wins because sorted)
+        for (const target of this.cachedTargets) {
+            const normalizedTargetPath = target.path.replace(/\\/g, '/');
+            if (relativePath.startsWith(normalizedTargetPath + '/') || relativePath.startsWith(normalizedTargetPath)) {
+                return {
+                    format: target.format,
+                    quality: target.quality ?? 80
+                };
+            }
+        }
+
+        // Fallback to first target or default
+        const fallback = this.cachedTargets[0] || DEFAULT_WATCH_TARGET;
+        return { format: fallback.format, quality: fallback.quality ?? 80 };
     }
 
     private triggerConfigUpdate() {
@@ -62,9 +144,10 @@ export class ConfigService {
         }
         this.debounceTimer = setTimeout(() => {
             console.log('Upfly: Config changed (debounced), validating and reloading...');
-            this.validateConfig(); // Validate on every config change
+            this.buildTargetCache(); // Rebuild cache on config change
+            this.validateConfig();
             this._onDidChangeConfig.fire();
-        }, 500); // 500ms delay to prevent rapid reloads
+        }, 500);
     }
 
     public get<T>(key: keyof UpflyConfig): T {
@@ -134,16 +217,36 @@ export class ConfigService {
             return true;
         }
 
-        // Validate `format`
+        // Validate `watchTargets` - must be array of { path, format, quality? }
         const validFormats = ['webp', 'png', 'jpeg', 'avif'];
-        if (config.format !== undefined && !validFormats.includes(config.format as string)) {
-            errors.push(`"format": "${config.format}" is invalid. Use one of: ${validFormats.join(', ')}`);
-        }
-
-        // Validate `quality`
-        if (config.quality !== undefined) {
-            if (typeof config.quality !== 'number' || config.quality < 1 || config.quality > 100) {
-                errors.push(`"quality": ${config.quality} is invalid. Use a number between 1 and 100.`);
+        if (config.watchTargets !== undefined) {
+            if (!Array.isArray(config.watchTargets)) {
+                errors.push(`"watchTargets" must be an array.`);
+            } else if (config.watchTargets.length === 0) {
+                errors.push(`"watchTargets" cannot be empty. Add at least one target.`);
+            } else {
+                config.watchTargets.forEach((target: any, index: number) => {
+                    const prefix = `watchTargets[${index}]`;
+                    
+                    if (typeof target !== 'object' || target === null) {
+                        errors.push(`${prefix}: Must be an object with "path" and "format".`);
+                        return;
+                    }
+                    
+                    if (!target.path || typeof target.path !== 'string') {
+                        errors.push(`${prefix}: "path" is required and must be a string.`);
+                    }
+                    
+                    if (!target.format || !validFormats.includes(target.format)) {
+                        errors.push(`${prefix}: "format" must be one of: ${validFormats.join(', ')}`);
+                    }
+                    
+                    if (target.quality !== undefined) {
+                        if (typeof target.quality !== 'number' || target.quality < 1 || target.quality > 100) {
+                            errors.push(`${prefix}: "quality" must be 1-100.`);
+                        }
+                    }
+                });
             }
         }
 
@@ -151,18 +254,6 @@ export class ConfigService {
         const validStorageModes = ['in-place', 'separate-output', 'separate-original'];
         if (config.storageMode !== undefined && !validStorageModes.includes(config.storageMode as string)) {
             errors.push(`"storageMode": "${config.storageMode}" is invalid. Use one of: ${validStorageModes.join(', ')}`);
-        }
-
-        // Validate `watchTargets`
-        if (config.watchTargets !== undefined) {
-            if (!Array.isArray(config.watchTargets)) {
-                errors.push(`"watchTargets" must be an array. Example: ["public", "assets"]`);
-            } else {
-                const invalidEntries = config.watchTargets.filter(t => typeof t !== 'string');
-                if (invalidEntries.length > 0) {
-                    errors.push(`"watchTargets" contains non-string values. All entries must be strings.`);
-                }
-            }
         }
 
         // Validate `enabled`
@@ -204,32 +295,29 @@ export class ConfigService {
         this._lastValidationErrors = errors;
         this._isConfigValid = errors.length === 0;
 
-        // Show error message if invalid (debounced to avoid spamming user while typing)
+        // Only log errors silently (no popup while editing)
         if (errors.length > 0) {
-            this.showValidationErrorDebounced(errors);
+            console.log('Upfly: Config validation errors detected (silent):', errors);
         }
 
         return this._isConfigValid;
     }
 
-    private notificationDebounceTimer: NodeJS.Timeout | undefined;
-
-    private showValidationErrorDebounced(errors: string[]) {
-        if (this.notificationDebounceTimer) {
-            clearTimeout(this.notificationDebounceTimer);
-        }
-        this.notificationDebounceTimer = setTimeout(() => {
-            const errorList = errors.map((e, i) => `${i + 1}. ${e}`).join('\n');
-            vscode.window.showWarningMessage(
-                `Upfly: Invalid config detected. Auto-conversion disabled until fixed.`,
-                'Show Details'
-            ).then(selection => {
-                if (selection === 'Show Details') {
-                    vscode.window.showErrorMessage(`Upfly Config Errors:\n${errorList}`, { modal: true });
-                }
-            });
-            console.error('Upfly Config Validation Errors:', errors);
-        }, 3000); 
+    /**
+     * Show validation errors to user (called when processing is attempted with invalid config)
+     */
+    public showConfigErrors() {
+        if (this._lastValidationErrors.length === 0) return;
+        
+        const errorList = this._lastValidationErrors.map((e, i) => `${i + 1}. ${e}`).join('\n');
+        vscode.window.showWarningMessage(
+            `Upfly: Invalid config. Fix errors to enable conversion.`,
+            'Show Details'
+        ).then(selection => {
+            if (selection === 'Show Details') {
+                vscode.window.showErrorMessage(`Upfly Config Errors:\n${errorList}`, { modal: true });
+            }
+        });
     }
 
     public async createConfigFile() {
@@ -249,11 +337,11 @@ export class ConfigService {
         const configTemplate = `{
   "enabled": true,      // Enable or disable Upfly image processing
 
-  "watchTargets": ["public"],   // Examples: "public", "src/assets", "images"
-
-  "format": "webp",       // Options: "webp", "avif", "jpeg", "png"
-
-  "quality": 80,        // Compression quality (1-100, higher = better quality, larger file)
+  // Each folder can have its own format and quality settings
+  // Subdirectories inherit parent settings unless overridden
+  "watchTargets": [
+    { "path": "public", "format": "webp", "quality": 80 }
+  ],
 
   // Where to store converted files
   // - in-place: Save converted file in same folder as original
@@ -261,16 +349,14 @@ export class ConfigService {
   // - separate-original: Move original to originalDirectory, keep converted in place
   "storageMode": "in-place",
 
-  "inPlaceKeepOriginal": false,     // Keep original file after in-place conversion (only applies to "in-place" mode)
+  "inPlaceKeepOriginal": false,     // Keep original file after conversion
 
   // --- Optional Fields (uncomment to use) ---
 
-  // "outputDirectory": "./converted",       // Directory for converted files (required for "separate-output" mode)
+  // "outputDirectory": "./converted",       // For "separate-output" mode
+  // "originalDirectory": "./originals",     // For "separate-original" mode
 
-  // "originalDirectory": "./originals",     // Directory to move originals (required for "separate-original" mode)
-
-  "maxFileSize": 20000000       // Maximum file size to process in bytes (default: 20MB)
-
+  "maxFileSize": 20000000       // Maximum file size in bytes (default: 20MB)
 }
 `;
 

@@ -19,17 +19,37 @@ export class WatcherService {
 
         const config = ConfigService.getInstance();
         const enabled = config.get<boolean>('enabled');
-        const rawWatchTargets = config.get<string[]>('watchTargets');
+        const rawWatchTargets = config.get<any>('watchTargets');
 
         if (!enabled) return;
 
-        const optimizedPatterns = this.optimizeWatchTargets(rawWatchTargets);
+        // Extract paths - handle both string[] (VS Code settings) and WatchTarget[] (config file)
+        const paths = this.extractPaths(rawWatchTargets);
+        const optimizedPatterns = this.optimizeWatchTargets(paths);
 
         optimizedPatterns.forEach(pattern => {
             console.log(`Upfly: Watching ${pattern}`);
             const watcher = vscode.workspace.createFileSystemWatcher(pattern);
             watcher.onDidCreate((uri) => this.onFileEvent(uri)); 
             this.watchers.push(watcher);
+        });
+    }
+
+    /**
+     * Extract paths from either string[] (VS Code settings) or WatchTarget[] (config file)
+     */
+    private extractPaths(rawTargets: any): string[] {
+        if (!Array.isArray(rawTargets) || rawTargets.length === 0) {
+            return ['public']; // Default
+        }
+
+        return rawTargets.map((item: any) => {
+            if (typeof item === 'string') {
+                return item;
+            } else if (typeof item === 'object' && item !== null && item.path) {
+                return item.path;
+            }
+            return 'public';
         });
     }
 
@@ -171,9 +191,10 @@ export class WatcherService {
     private async triggerProcessing(filePath: string) {
         const config = ConfigService.getInstance();
 
-        // Skip processing if config is invalid (allow normal paste)
+        // Skip processing if config is invalid - show error popup (JIT)
         if (!config.isConfigValid) {
             console.log('Upfly: Config is invalid, skipping auto-conversion. File will be pasted normally.');
+            config.showConfigErrors(); // Show error only when user tries to use the feature
             return;
         }
         
@@ -185,9 +206,12 @@ export class WatcherService {
                     return;
                 }
 
+                // Get format/quality specific to this file's path
+                const { format, quality } = config.getOptionsForPath(filePath);
+
                 await ConverterService.convertFile(filePath, {
-                    format: config.get('format'),
-                    quality: config.get('quality'),
+                    format,
+                    quality,
                     storageMode: config.get('storageMode'),
                     outputDirectory: config.get('outputDirectory'),
                     originalDirectory: config.get('originalDirectory'),

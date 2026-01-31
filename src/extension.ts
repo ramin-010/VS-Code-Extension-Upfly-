@@ -13,14 +13,25 @@ type ImageFormat = 'webp' | 'png' | 'jpeg' | 'avif';
 async function convertFiles(uris: vscode.Uri[], formatOverride?: ImageFormat, isCompression: boolean = false, forceInPlace: boolean = false) {
     const config = ConfigService.getInstance();
 
+    // Check config validity before processing (JIT error)
+    if (!config.isConfigValid) {
+        config.showConfigErrors();
+        return;
+    }
+
     for (const uri of uris) {
         const filePath = uri.fsPath;
         const fileExt = path.extname(filePath).toLowerCase().replace('.', '');
         const normalizedExt = fileExt === 'jpg' ? 'jpeg' : fileExt;
         
+        // Get per-folder format/quality settings
+        const pathOptions = config.getOptionsForPath(filePath);
+        
         const format = isCompression 
             ? (normalizedExt as ImageFormat)
-            : (formatOverride ?? config.get<ImageFormat>('format'));
+            : (formatOverride ?? pathOptions.format);
+
+        const quality = isCompression ? 60 : pathOptions.quality;
 
         globalQueue.add(async () => {
             const isValid = await ConverterService.isValidImage(filePath);
@@ -31,11 +42,11 @@ async function convertFiles(uris: vscode.Uri[], formatOverride?: ImageFormat, is
 
             await ConverterService.convertFile(filePath, {
                 format: format,
-                quality: isCompression ? 60 : config.get('quality'),
-                storageMode: forceInPlace ? 'in-place' : config.get('storageMode'), // Force in-place if manual
+                quality: quality,
+                storageMode: forceInPlace ? 'in-place' : config.get('storageMode'),
                 outputDirectory: config.get('outputDirectory'),
                 originalDirectory: config.get('originalDirectory'),
-                inPlaceKeepOriginal: forceInPlace ? true : config.get('inPlaceKeepOriginal'), // Manual = keep original usually?
+                inPlaceKeepOriginal: forceInPlace ? true : config.get('inPlaceKeepOriginal'),
                 isCompression: isCompression
             });
         });
