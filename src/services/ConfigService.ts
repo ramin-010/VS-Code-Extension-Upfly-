@@ -237,18 +237,70 @@ export class ConfigService {
 
     /**
      * Resolve ${env:VAR_NAME} patterns to actual environment values
+     * Loads from both .env file in workspace AND system environment variables
      */
     private resolveEnvVars(value: string): string {
         if (typeof value !== 'string') return value;
         
+        // Load .env file from workspace root
+        const envVars = this.loadEnvFile();
+        
         return value.replace(/\$\{env:([^}]+)\}/g, (match, varName) => {
-            const envValue = process.env[varName];
+            // First check .env file, then fall back to process.env
+            const envValue = envVars[varName] ?? process.env[varName];
             if (envValue === undefined) {
-                console.warn(`Upfly: Environment variable ${varName} not found`);
+                console.warn(`Upfly: Environment variable ${varName} not found in .env or system environment`);
                 return match; // Keep original if not found
             }
             return envValue;
         });
+    }
+
+    /**
+     * Parse .env file from workspace root
+     */
+    private loadEnvFile(): Record<string, string> {
+        const envVars: Record<string, string> = {};
+        
+        if (!vscode.workspace.workspaceFolders) {
+            return envVars;
+        }
+        
+        const rootPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+        const envPath = path.join(rootPath, '.env');
+        
+        if (!fs.existsSync(envPath)) {
+            return envVars;
+        }
+        
+        try {
+            const envContent = fs.readFileSync(envPath, 'utf-8');
+            const lines = envContent.split('\n');
+            
+            for (const line of lines) {
+                const trimmed = line.trim();
+                // Skip comments and empty lines
+                if (!trimmed || trimmed.startsWith('#')) continue;
+                
+                const eqIndex = trimmed.indexOf('=');
+                if (eqIndex === -1) continue;
+                
+                const key = trimmed.substring(0, eqIndex).trim();
+                let value = trimmed.substring(eqIndex + 1).trim();
+                
+                // Remove surrounding quotes if present
+                if ((value.startsWith('"') && value.endsWith('"')) ||
+                    (value.startsWith("'") && value.endsWith("'"))) {
+                    value = value.slice(1, -1);
+                }
+                
+                envVars[key] = value;
+            }
+        } catch (e) {
+            console.warn('Upfly: Failed to parse .env file:', e);
+        }
+        
+        return envVars;
     }
 
     private triggerConfigUpdate() {
@@ -515,6 +567,7 @@ export class ConfigService {
   // --- Cloud Upload (optional) ---
   // Automatically upload converted images to cloud storage
   // Supports: "cloudinary" | "s3" | "gcs"
+  
   // "cloudUpload": {
   //   "enabled": true,
   //   "watchTargets": ["public"],    // Folders to upload (If same directory doesn;t exist in the root watchTargets, it will not go through conversion and upload the original file)

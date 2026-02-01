@@ -11,6 +11,9 @@ esbuild.js
 .gitignore
 .eslintrc*
 
+# Keep images for README and icon
+!images/**
+
 # Node modules - exclude all by default
 node_modules/**
 

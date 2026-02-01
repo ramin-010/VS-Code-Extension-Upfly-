@@ -1,14 +1,32 @@
 {
   "name": "upfly-vscode",
-  "displayName": "Upfly: Image Workflow",
-  "description": "Auto-convert, compress, and upload images on paste",
+  "displayName": "Upfly - Image Optimizer & Cloud Uploader",
+  "description": "Auto-convert images to WebP/AVIF, compress, and upload to Cloudinary/S3/GCS on paste. The complete image optimization workflow for VS Code.",
   "publisher": "ramin",
   "version": "0.0.1",
+  "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
+  "keywords": [
+    "image",
+    "optimizer",
+    "webp",
+    "avif",
+    "compress",
+    "convert",
+    "upload",
+    "cloudinary",
+    "s3",
+    "gcs",
+    "assets",
+    "paste",
+    "image optimization",
+    "image compression"
+  ],
   "categories": [
-    "Other"
+    "Other",
+    "Formatters"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -57,7 +75,7 @@
       "explorer/context": [
         {
           "submenu": "upfly.submenu",
-          "group": "upfly",
+          "group": "navigation",
           "when": "resourceExtname == .png || resourceExtname == .jpg || resourceExtname == .jpeg || resourceExtname == .webp || resourceExtname == .avif || resourceExtname == .gif || resourceExtname == .tiff"
         }
       ],
@@ -87,7 +105,7 @@
     "submenus": [
       {
         "id": "upfly.submenu",
-        "label": "Upfly"
+        "label": "Upfly 🚀"
       }
     ],
     "configuration": {

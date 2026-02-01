@@ -15,10 +15,11 @@ export class CloudinaryAdapter extends CloudAdapter {
         try {
             const cloudinary = require('cloudinary').v2;
 
+            // Support both camelCase and snake_case field names
             cloudinary.config({
-                cloud_name: config.cloud_name,
-                api_key: config.api_key,
-                api_secret: config.api_secret,
+                cloud_name: config.cloudName || config.cloud_name,
+                api_key: config.apiKey || config.api_key,
+                api_secret: config.apiSecret || config.api_secret,
                 secure: config.secure !== false
             });
 

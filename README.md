@@ -1,139 +1,259 @@
-# Upfly 🚀
+# Upfly - Image Optimizer & Cloud Uploader 🚀
 
-**Upfly** is the ultimate image workflow tool for VS Code. It automatically converts, compresses, and uploads images simply by dragging and dropping (or pasting) them into your project.
+**The complete image optimization workflow for VS Code.**  
+Paste, convert, compress, and upload—all without leaving your editor.
 
-Say goodbye to manual conversion tools and messy `assets` folders.
+[![VS Code Marketplace](https://img.shields.io/badge/VS%20Code-Marketplace-blue?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=ramin.upfly-vscode)
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 
-## ✨ Features
+---
 
-- **Auto-Conversion**: Automatically convert pasted images to `WebP`, `AVIF`, `PNG`, `JPEG`.
-- **Cloud Uploads**: Upload directly to **S3**, **Cloudinary**, or **Google Cloud Storage** without saving locally.
-- **Smart Watching**: Define specific folders to watch (e.g., `public`, `assets`).
-- **Zero Friction**: Just paste or drop your file. Upfly handles the rest.
-- **Circuit Breaker**: Prevents notification spam if uploads fail.
-- **Bundled & Fast**: Lightweight (<1MB) and blazing fast.
+## Why Upfly?
+
+| Without Upfly 😫                                                                                                                                              | With Upfly ✨                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| Open browser → Find converter → Upload → Download → Rename → Move to folder. **(Plus, your Downloads folder becomes a chaotic graveyard of random files 🗑️)** | **Just paste. Done.**            |
+| Manually upload to cloud storage → Copy URL → Update code                                                                                                     | **Automatic upload. URL ready.** |
+| Install multiple tools for different formats                                                                                                                  | **One extension. All formats.**  |
+
+---
+
+## ⚡ Features at a Glance
+
+### ⚡ Auto-Magic Folder Watching
+
+**The heart of Upfly.** Automate your entire image pipeline by defining smart watch targets.
+
+When you watch a folder, Upfly doesn't just watch that single directory—it **recursively monitors every subfolder inside it**. Whether you paste an image into the root or a deeply nested subdirectory, Upfly detects it instantly.
+
+**Example:**
+If you watch `"public"`, Upfly automatically handles the entire tree:
+
+- ✅ `public/hero.png`
+- ✅ `public/blog/posts/2024/image.jpg`
+- ✅ `public/assets/ui/icons/logo.png`
+
+![Folder Watcher Demo](https://res.cloudinary.com/dbg8levkl/image/upload/v1769936809/watcher_conversionGif_h65qjz.gif)
+
+**Powerful Configuration:**
+
+```jsonc
+"watchTargets": [
+  // recursive: true by default!
+  // Any image added to 'public' or its subfolders gets converted to WebP
+  { "path": "public", "format": "webp", "quality": 80 }
+]
+```
+
+---
+
+### 🖱️ Right-Click Convert
+
+**Convert any image instantly** from the context menu. Select one or multiple files, right-click, and choose your format.
+
+![Right-Click Conversion Demo](https://res.cloudinary.com/dbg8levkl/image/upload/v1769936809/manual_conversionGif_upxmwr.gif)
+
+**Supported conversions:**
+
+- Convert to **WebP** (best for web)
+- Convert to **AVIF** (next-gen, smallest)
+- Convert to **PNG** (lossless)
+- Convert to **JPEG** (universal)
+- **Compress** (same format, reduced size)
+
+---
+
+### ☁️ Direct Cloud Upload
+
+**Convert and upload in one step.** Images are processed locally and uploaded directly to your cloud storage—no manual steps required.
+
+![Cloud Upload Demo](https://res.cloudinary.com/dbg8levkl/image/upload/v1769936897/cloud_conversionGif_wzipl2.gif)
+
+**Supported providers:**
+
+- ☁️ **Cloudinary**
+- 🪣 **AWS S3**
+- 🌐 **Google Cloud Storage**
+
+All uploads are logged to `.upfly/uploads.json` with URLs ready to copy.
 
 ---
 
 ## 🚀 Quick Start
 
-1.  **Install Upfly** from the VS Code Marketplace.
-2.  Run command: `Upfly: Init Config` to create `upfly.config.json` in your root.
-3.  Paste an image into any watched folder!
+### 1. Install
+
+Search **"Upfly"** in VS Code Extensions or install from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=ramin.upfly-vscode).
+
+### 2. Create Config
+
+Open Command Palette (`Ctrl+Shift+P`) → **Upfly: Create Config File**
+
+### 3. Use It!
+
+**Option A:** Right-click any image → **Upfly 🚀** → Choose format  
+**Option B:** Drop images into a watched folder → Auto-converted!
 
 ---
 
-## ☁️ Cloud Uploads
+## 📝 Configuration
 
-Upfly can bypass your local disk and upload images directly to the cloud. This is perfect for keeping your repo light.
+### Basic Setup (Local Conversion)
 
-### How it works
-
-1.  Upfly detects you pasted an image into a **Cloud Watch Target**.
-2.  It converts the image in-memory (e.g., to WebP).
-3.  It uploads it to your provider.
-4.  It returns the public URL in `.upfly/uploads.json` (or copies it to clipboard coming soon).
-5.  **No local file** is left behind (unless configured otherwise).
-
-### Configuration
-
-Add `cloudUpload` to your `upfly.config.json`:
-
-```json
+```jsonc
 {
-  "watchTargets": [
-    // Folders for LOCAL conversion (optional)
-    { "path": "public", "format": "webp" }
-  ],
-  "cloudUpload": {
-    "enabled": true,
-    "watchTargets": ["public", "raw-uploads"],
-    "provider": "cloudinary",
-    "deleteLocalAfterUpload": true,
-    "config": {
-      "cloudName": "${env:CLOUDINARY_CLOUD_NAME}",
-      "apiKey": "${env:CLOUDINARY_API_KEY}",
-      "apiSecret": "${env:CLOUDINARY_API_SECRET}",
-      "folder": "my-app-assets" // Optional default folder
-    }
-  }
+  "enabled": true,
+
+  "watchTargets": [{ "path": "public", "format": "webp", "quality": 80 }],
+
+  "storageMode": "in-place",
 }
 ```
 
-> **Note**: `watchTargets` in `cloudUpload` are independent.
->
-> - If a folder is **ONLY** in `cloudUpload.watchTargets`, the **original** file is uploaded (no conversion).
-> - If a folder is in **BOTH** `watchTargets` (root) and `cloudUpload`, it is **converted** before upload.
+### Storage Modes
 
-### Supported Providers
+| Mode                | Description                                                   |
+| ------------------- | ------------------------------------------------------------- |
+| `in-place`          | Replace original with converted file                          |
+| `separate-output`   | Keep original, save converted to `outputDirectory`            |
+| `separate-original` | Move original to `originalDirectory`, keep converted in place |
 
-#### 1. Cloudinary
+---
 
-```json
-"provider": "cloudinary",
-"config": {
-  "cloudName": "...",
-  "apiKey": "...",
-  "apiSecret": "..."
+## ☁️ Cloud Upload Configuration
+
+Add your credentials to a `.env` file in your workspace root:
+
+```env
+CLOUDINARY_CLOUD_NAME=your-cloud-name
+CLOUDINARY_API_KEY=123456789
+CLOUDINARY_API_SECRET=your-secret
+```
+
+Then configure `upfly.config.json`:
+
+### Cloudinary
+
+```jsonc
+"cloudUpload": {
+  "enabled": true,
+  "watchTargets": ["public"],
+  "provider": "cloudinary",
+  "config": {
+    "cloudName": "${env:CLOUDINARY_CLOUD_NAME}",
+    "apiKey": "${env:CLOUDINARY_API_KEY}",
+    "apiSecret": "${env:CLOUDINARY_API_SECRET}",
+    "folder": "uploads"
+  },
+  "deleteLocalAfterUpload": false
 }
 ```
 
-#### 2. AWS S3 (or Compatible)
+### AWS S3
 
-```json
-"provider": "s3",
-"config": {
-  "region": "us-east-1",
-  "bucket": "my-bucket",
-  "accessKeyId": "...",
-  "secretAccessKey": "..."
+```jsonc
+"cloudUpload": {
+  "enabled": true,
+  "watchTargets": ["public"],
+  "provider": "s3",
+  "config": {
+    "region": "${env:AWS_REGION}",
+    "bucket": "${env:AWS_BUCKET}",
+    "accessKeyId": "${env:AWS_ACCESS_KEY_ID}",
+    "secretAccessKey": "${env:AWS_SECRET_ACCESS_KEY}"
+  },
+  "deleteLocalAfterUpload": false
 }
 ```
 
-#### 3. Google Cloud Storage (GCS)
+### Google Cloud Storage
 
-```json
-"provider": "gcs",
-"config": {
-  "bucket": "my-bucket",
-  "credentials": { ... } // Or keyFilename
+```jsonc
+"cloudUpload": {
+  "enabled": true,
+  "watchTargets": ["public"],
+  "provider": "gcs",
+  "config": {
+    "bucket": "${env:GCS_BUCKET}",
+    "projectId": "${env:GCS_PROJECT_ID}",
+    "keyFilename": "./gcs-service-account.json"
+  },
+  "deleteLocalAfterUpload": false
 }
 ```
 
 ---
 
-## 🛠 Local Conversion Mode
+## � Commands
 
-If you just want to optimize images locally:
+| Command                      | Description                                  |
+| ---------------------------- | -------------------------------------------- |
+| `Upfly: Create Config File`  | Create `upfly.config.json` in workspace root |
+| `Upfly 🚀` → Convert to WebP | Convert selected images to WebP              |
+| `Upfly 🚀` → Convert to AVIF | Convert selected images to AVIF              |
+| `Upfly 🚀` → Convert to PNG  | Convert selected images to PNG               |
+| `Upfly 🚀` → Convert to JPEG | Convert selected images to JPEG              |
+| `Upfly 🚀` → Compress        | Compress without changing format             |
 
-```json
-{
-  "watchTargets": [{ "path": "images", "format": "avif", "quality": 85 }],
-  "storageMode": "in-place"
-}
-```
+---
 
-**Storage Modes:**
+## � Supported Formats
 
-- `in-place`: Replaces the original file (or keeps backup).
-- `separate-output`: Saves converted files to a specific directory.
-- `separate-original`: Moves original files to a "raw" directory.
+**Input:** PNG, JPEG, WebP, AVIF, GIF, TIFF  
+**Output:** WebP, AVIF, PNG, JPEG
 
 ---
 
 ## 🔒 Security
 
-Upfly supports environment variables in config to keep your secrets safe.
-Use the syntax: `${env:YOUR_VAR_NAME}`.
-
-Example:
-
-```json
-"apiSecret": "${env:CLOUDINARY_SECRET}"
-```
+- ✅ Use `${env:VAR_NAME}` syntax for credentials
+- ✅ Loads `.env` automatically from workspace root
+- ✅ Never commit secrets to your repository
+- ✅ All processing happens locally
 
 ---
 
-## License
+## ⚡ Performance
 
-MIT
+- Bundled with esbuild for fast startup
+- In-memory processing (no temp files)
+- Queue-based batch processing
+- Minimal dependencies
+
+---
+
+## 🤝 Contributing
+
+Found a bug or have a feature request? [Open an issue](https://github.com/ramin/upfly-vscode/issues)!
+
+---
+
+---
+
+## 📦 Powered by Upfly Core
+
+**Complete File Handling Solution. Just One Middleware.**
+
+Love this extension? It's built on top of **Upfly**, the ultimate file handling library for Node.js.
+
+Handle file uploads from **interception to storage**. Stream-based processing, automatic image optimization, multi-cloud storage, and built-in reliability.
+
+- ⚡ **Stream-Based Architecture**: Non-blocking I/O for large files
+- ☁️ **Multi-Cloud Support**: AWS S3, Cloudinary, Google Cloud Storage
+- 🛡️ **Reliable Fallback System**: Automatic backup streams for failed conversions
+- 🎨 **Auto Image Optimization**: WebP conversion with Sharp quality control
+
+[![npm version](https://img.shields.io/npm/v/upfly.svg?style=flat-square&color=4F46E5)](https://www.npmjs.com/package/upfly)
+[![downloads](https://img.shields.io/npm/dm/upfly.svg?style=flat-square&color=34D399)](https://www.npmjs.com/package/upfly)
+
+👉 **[Visit Website](https://upfly-frontend.vercel.app/)** • **[View on GitHub](https://github.com/ramin-010/upfly)**
+
+---
+
+## 📄 License
+
+MIT © Ramin
+
+---
+
+**Made with ❤️ for developers who value their time.**
