@@ -496,6 +496,16 @@ export class ConfigService {
     }
 
     /**
+     * Get the directory of the config file that applies to a given file path.
+     * Used to resolve relative paths (like outputDirectory) relative to the config location.
+     */
+    public getConfigDir(filePath: string): string {
+        const configPath = this.findBestConfig(filePath);
+        if (configPath) return path.dirname(configPath);
+        return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(filePath);
+    }
+
+    /**
      * Get the common parent directory of two paths
      */
     private getCommonParent(path1: string, path2: string): string {
@@ -769,46 +779,40 @@ export class ConfigService {
         }
 
         const configTemplate = `{
-  "enabled": true,      // Enable or disable Upfly image processing
+  // Auto-convert images dropped into watched folders
+  "enabled": true,
 
-  // Folders to watch for new images - each can have its own format and quality
-  // Images dropped into these folders will be automatically converted
+  // Watched folders — each can have its own format & quality
   "watchTargets": [
     { "path": "public", "format": "webp", "quality": 80 }
   ],
 
-  // Storage mode for converted files:
-  // - "in-place": Replace original with converted file in same location
-  // - "separate-output": Keep original, save converted to outputDirectory
-  // - "separate-original": Move original to originalDirectory, keep converted in place
+  // "in-place"           → replace original in same location
+  // "separate-output"    → keep original, save converted to outputDirectory
+  // "separate-original"  → move original to originalDirectory, converted stays in place
   "storageMode": "in-place",
+  "inPlaceKeepOriginal": false,
+  "outputDirectory": "./converted",
+  "originalDirectory": "./originals",
 
-  "inPlaceKeepOriginal": false,     // When true, keeps original alongside converted file
+  // Max file size to process (default: 20 MB)
+  "maxFileSize": 20000000
 
-  "outputDirectory": "./converted",       // Used and applicable only with "separate-output" mode
-  "originalDirectory": "./originals",     // Used and applicable only with "separate-original" mode
-
-  // TIP: For global settings that apply to ALL projects, delete this file and use 
-  // VS Code User Settings (Command Palette -> "Upfly: Open Global Settings") instead.
-  
-  // --- Cloud Upload (optional) ---
-  // Automatically upload converted images to cloud storage
-  // Supports: "cloudinary" | "s3" | "gcs"
-  
+  // ── Cloud Upload (optional) ─────────────────────────────
+  // Providers: "cloudinary" | "s3" | "gcs"
+  //
   // "cloudUpload": {
   //   "enabled": true,
-  //   "watchTargets": ["public"],    // Folders to upload (If same directory doesn't exist in the root watchTargets, it will not go through conversion and upload the original file)
+  //   "watchTargets": ["public"],
   //   "provider": "cloudinary",
   //   "config": {
   //     "cloudName": "\${env:CLOUDINARY_CLOUD_NAME}",
   //     "apiKey": "\${env:CLOUDINARY_API_KEY}",
   //     "apiSecret": "\${env:CLOUDINARY_API_SECRET}",
-  //     "folder": "uploads"           // Optional: folder path in Cloudinary
+  //     "folder": "uploads"
   //   },
   //   "deleteLocalAfterUpload": false
-  // },
-
-  "maxFileSize": 20000000       // Maximum file size in bytes (default: 20MB)
+  // }
 }
 `;
 

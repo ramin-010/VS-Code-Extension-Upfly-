@@ -46,8 +46,9 @@ async function convertFiles(uris: vscode.Uri[], formatOverride?: ImageFormat, is
                 storageMode: forceInPlace ? 'in-place' : config.get('storageMode', filePath),
                 outputDirectory: config.get('outputDirectory', filePath),
                 originalDirectory: config.get('originalDirectory', filePath),
-                inPlaceKeepOriginal: forceInPlace ? true : config.get('inPlaceKeepOriginal', filePath),
-                isCompression: isCompression
+                inPlaceKeepOriginal: forceInPlace ? false : config.get('inPlaceKeepOriginal', filePath),
+                isCompression: isCompression,
+                configBaseDir: config.getConfigDir(filePath)
             });
         });
     }
@@ -135,24 +136,25 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push({ dispose: () => watcherService.dispose() });
     context.subscriptions.push({ dispose: () => configService.dispose() });
 
-    // Show Welcome Message on First Install
-    const hasShownWelcome = context.globalState.get<boolean>('upfly.hasShownWelcome', false);
+    // Show Welcome Message — per-project tracking
+    const workspaceId = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+    const dismissedProjects = context.globalState.get<string[]>('upfly.dismissedProjects', []);
     const configAlreadyExists = configService.hasLocalConfig();
     
-    if (!hasShownWelcome && !configAlreadyExists) {
+    if (workspaceId && !dismissedProjects.includes(workspaceId) && !configAlreadyExists) {
         vscode.window.showInformationMessage(
-            'Welcome to Upfly! 🚀 Create a config file to customize image processing, or use VS Code Settings (Ctrl+,) for global defaults.',
+            'Welcome to Upfly! 🚀 Create a config file to customize image processing.',
             'Create Config',
             'Later'
         ).then(selection => {
             if (selection === 'Create Config') {
                 vscode.commands.executeCommand('upfly.init');
-                context.globalState.update('upfly.hasShownWelcome', true);
-            } else if (selection === 'Later') {
-                context.globalState.update('upfly.hasShownWelcome', true);
             }
-            // If dismissed (undefined), we do NOT mark it as shown,
-            // so it will appear again on the next activation.
+            if (selection === 'Create Config' || selection === 'Later') {
+                const updated = [...dismissedProjects, workspaceId];
+                context.globalState.update('upfly.dismissedProjects', updated);
+            }
+            // If dismissed (clicked X), do NOT mark — popup will reappear next activation.
         });
     }
 }

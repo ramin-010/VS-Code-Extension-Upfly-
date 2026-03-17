@@ -10,6 +10,11 @@ import { CloudService } from './CloudService';
 export class WatcherService {
     private watchers: vscode.FileSystemWatcher[] = [];
     private processingFiles: Set<string> = new Set();
+    private renameListener: vscode.Disposable | undefined;
+
+    // Track recently deleted files for rename detection (external renames)
+    // Maps file size -> { path, timestamp } for correlation with subsequent creates
+    private recentDeletes: Map<number, { path: string, timestamp: number }[]> = new Map();
     
     // Supported extensions for Glob generation
     private static readonly EXTENSIONS_GLOB = '{png,jpg,jpeg,webp,avif,tiff,gif}';
@@ -42,9 +47,22 @@ export class WatcherService {
         optimizedPatterns.forEach(pattern => {
             console.log(`Upfly: Watching ${pattern}`);
             const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-            watcher.onDidCreate((uri) => this.onFileEvent(uri)); 
+            watcher.onDidCreate((uri) => this.onFileEvent(uri));
+            watcher.onDidDelete((uri) => this.onDeleteEvent(uri));
             this.watchers.push(watcher);
         });
+
+        // Listen for VS Code renames (F2, Explorer drag, etc.)
+        // This fires BEFORE the file watcher events, so we can mark the 
+        // new path in ProcessingCache to suppress re-optimization.
+        if (!this.renameListener) {
+            this.renameListener = vscode.workspace.onDidRenameFiles((e) => {
+                for (const file of e.files) {
+                    const newPath = file.newUri.fsPath;
+                    ProcessingCache.add(newPath);
+                }
+            });
+        }
     }
 
     /**
@@ -139,6 +157,74 @@ export class WatcherService {
         return finalGlobs;
     }
 
+    /**
+     * Track file deletions for rename detection.
+     * When a file is renamed externally, the OS fires delete + create.
+     * We record the deleted file's size so we can correlate it with the next create.
+     */
+    private onDeleteEvent(uri: vscode.Uri) {
+        try {
+            // The file is already gone, but we can try to get its size from our recent knowledge.
+            // For external renames, the delete event may still have the file briefly accessible.
+            // We'll store just the path info and use a size-based check in onFileEvent.
+            const filePath = uri.fsPath;
+            const RENAME_WINDOW_MS = 2000;
+
+            // Record this deletion timestamp by path
+            // We'll use path-based tracking: store the deleted path and check if
+            // a create appears in the same directory within the time window
+            const dir = path.dirname(filePath);
+            const ext = path.extname(filePath).toLowerCase();
+            const key = `${dir}|${ext}`;
+
+            if (!this.recentDeletes.has(0)) {
+                this.recentDeletes.set(0, []);
+            }
+            this.recentDeletes.get(0)!.push({ path: key, timestamp: Date.now() });
+
+            // Cleanup old entries
+            setTimeout(() => {
+                const entries = this.recentDeletes.get(0);
+                if (entries) {
+                    const now = Date.now();
+                    const filtered = entries.filter(e => now - e.timestamp < RENAME_WINDOW_MS);
+                    if (filtered.length === 0) {
+                        this.recentDeletes.delete(0);
+                    } else {
+                        this.recentDeletes.set(0, filtered);
+                    }
+                }
+            }, RENAME_WINDOW_MS + 100);
+        } catch {}
+    }
+
+    /**
+     * Check if a newly created file is likely a rename of a recently deleted file.
+     * Uses directory + extension matching within a short time window.
+     */
+    private isLikelyRename(filePath: string): boolean {
+        const dir = path.dirname(filePath);
+        const ext = path.extname(filePath).toLowerCase();
+        const key = `${dir}|${ext}`;
+        const RENAME_WINDOW_MS = 2000;
+
+        const entries = this.recentDeletes.get(0);
+        if (!entries) return false;
+
+        const now = Date.now();
+        const matchIndex = entries.findIndex(
+            e => e.path === key && (now - e.timestamp) < RENAME_WINDOW_MS
+        );
+
+        if (matchIndex !== -1) {
+            // Consume the entry so it can't match again
+            entries.splice(matchIndex, 1);
+            return true;
+        }
+
+        return false;
+    }
+
     private onFileEvent(uri: vscode.Uri) {
         let filePath = uri.fsPath;
 
@@ -148,6 +234,11 @@ export class WatcherService {
  
         if (ProcessingCache.consume(filePath)) {
             console.log(`Upfly: Ignoring self-generated file: ${filePath}`);
+            return;
+        }
+
+        // Check if this is likely a rename (external rename: delete + create)
+        if (this.isLikelyRename(filePath)) {
             return;
         }
 
@@ -261,7 +352,8 @@ export class WatcherService {
                         storageMode: config.get('storageMode', filePath),
                         outputDirectory: config.get('outputDirectory', filePath),
                         originalDirectory: config.get('originalDirectory', filePath),
-                        inPlaceKeepOriginal: config.get('inPlaceKeepOriginal', filePath)
+                        inPlaceKeepOriginal: config.get('inPlaceKeepOriginal', filePath),
+                        configBaseDir: config.getConfigDir(filePath)
                     });
                 }
 
@@ -399,6 +491,11 @@ export class WatcherService {
     public dispose() {
         this.watchers.forEach(w => w.dispose());
         this.watchers = [];
+        if (this.renameListener) {
+            this.renameListener.dispose();
+            this.renameListener = undefined;
+        }
+        this.recentDeletes.clear();
         if (WatcherService.uploadDebounceTimer) {
             clearTimeout(WatcherService.uploadDebounceTimer);
         }
