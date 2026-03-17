@@ -3,7 +3,11 @@
   "displayName": "Upfly - Image Optimizer & Cloud Uploader",
   "description": "Auto-convert images to WebP/AVIF, compress, and upload to Cloudinary/S3/GCS on paste. The complete image optimization workflow for VS Code.",
   "publisher": "ramin",
-  "version": "0.0.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ramin-010/VS-Code-Extension-Upfly-.git"
+  },
+  "version": "0.0.3",
   "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.85.0"
@@ -42,6 +46,10 @@
       }
     ],
     "commands": [
+      {
+        "command": "upfly.openSettings",
+        "title": "Upfly: Open Global Settings"
+      },
       {
         "command": "upfly.convertFile",
         "title": "Upfly: Convert to WebP"
@@ -115,6 +123,11 @@
           "type": "boolean",
           "default": true,
           "description": "Enable Upfly image processing."
+        },
+        "upfly.useGlobalSettings": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, VS Code User Settings act as global defaults for projects without upfly.config.json."
         },
         "upfly.watchTargets": {
           "type": "array",

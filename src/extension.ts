@@ -43,11 +43,12 @@ async function convertFiles(uris: vscode.Uri[], formatOverride?: ImageFormat, is
             await ConverterService.convertFile(filePath, {
                 format: format,
                 quality: quality,
-                storageMode: forceInPlace ? 'in-place' : config.get('storageMode'),
-                outputDirectory: config.get('outputDirectory'),
-                originalDirectory: config.get('originalDirectory'),
-                inPlaceKeepOriginal: forceInPlace ? true : config.get('inPlaceKeepOriginal'),
-                isCompression: isCompression
+                storageMode: forceInPlace ? 'in-place' : config.get('storageMode', filePath),
+                outputDirectory: config.get('outputDirectory', filePath),
+                originalDirectory: config.get('originalDirectory', filePath),
+                inPlaceKeepOriginal: forceInPlace ? false : config.get('inPlaceKeepOriginal', filePath),
+                isCompression: isCompression,
+                configBaseDir: config.getConfigDir(filePath)
             });
         });
     }
@@ -109,6 +110,10 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    const openSettingsCmd = vscode.commands.registerCommand('upfly.openSettings', () => {
+        vscode.commands.executeCommand('workbench.action.openSettings', 'upfly');
+    });
+
     context.subscriptions.push(configService.onDidChangeConfig(() => {
         console.log('Upfly: Config changed, reloading watcher...');
         watcherService.initialize();
@@ -127,21 +132,29 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(convertToJpeg);
     context.subscriptions.push(convertToPng);
     context.subscriptions.push(compressCmd);
+    context.subscriptions.push(openSettingsCmd);
     context.subscriptions.push({ dispose: () => watcherService.dispose() });
     context.subscriptions.push({ dispose: () => configService.dispose() });
 
-    // Show Welcome Message on First Install
-    const hasShownWelcome = context.globalState.get<boolean>('upfly.hasShownWelcome', false);
-    if (!hasShownWelcome) {
+    // Show Welcome Message — per-project tracking
+    const workspaceId = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+    const dismissedProjects = context.globalState.get<string[]>('upfly.dismissedProjects', []);
+    const configAlreadyExists = configService.hasLocalConfig();
+    
+    if (workspaceId && !dismissedProjects.includes(workspaceId) && !configAlreadyExists) {
         vscode.window.showInformationMessage(
-            'Welcome to Upfly! 🚀 Would you like to create a configuration file to customize your image processing?',
+            'Welcome to Upfly! 🚀 Create a config file to customize image processing.',
             'Create Config',
             'Later'
         ).then(selection => {
             if (selection === 'Create Config') {
                 vscode.commands.executeCommand('upfly.init');
             }
-            context.globalState.update('upfly.hasShownWelcome', true);
+            if (selection === 'Create Config' || selection === 'Later') {
+                const updated = [...dismissedProjects, workspaceId];
+                context.globalState.update('upfly.dismissedProjects', updated);
+            }
+            // If dismissed (clicked X), do NOT mark — popup will reappear next activation.
         });
     }
 }

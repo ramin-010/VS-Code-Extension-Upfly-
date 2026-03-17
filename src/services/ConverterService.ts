@@ -12,6 +12,7 @@ interface ConversionOptions {
     originalDirectory?: string;
     inPlaceKeepOriginal?: boolean;
     isCompression?: boolean;
+    configBaseDir?: string; // Directory of the nearest config file, for resolving relative paths
 }
 
 export class ConverterService {
@@ -107,9 +108,10 @@ export class ConverterService {
 
         let finalOutputDir = fileDir;
         if (options.storageMode === 'separate-output' && options.outputDirectory) {
+            const baseDir = options.configBaseDir || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || fileDir;
             finalOutputDir = path.isAbsolute(options.outputDirectory) 
                 ? options.outputDirectory 
-                : path.resolve(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || fileDir, options.outputDirectory);
+                : path.resolve(baseDir, options.outputDirectory);
             if (!fs.existsSync(finalOutputDir)) {
                 fs.mkdirSync(finalOutputDir, { recursive: true });
             }
@@ -147,9 +149,10 @@ export class ConverterService {
                 fs.renameSync(tempPath, finalOutputPath);
 
                 if (options.originalDirectory) {
+                    const baseDir = options.configBaseDir || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || fileDir;
                     const originalDir = path.isAbsolute(options.originalDirectory)
                         ? options.originalDirectory
-                        : path.resolve(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || fileDir, options.originalDirectory);
+                        : path.resolve(baseDir, options.originalDirectory);
                     if (!fs.existsSync(originalDir)) {
                         fs.mkdirSync(originalDir, { recursive: true });
                     }
