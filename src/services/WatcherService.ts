@@ -203,10 +203,27 @@ export class WatcherService {
     private async triggerProcessing(filePath: string) {
         const config = ConfigService.getInstance();
 
+        // Check if conversion is enabled for this specific file's nearest config
+        const enabled = config.get<boolean>('enabled', filePath);
+        if (!enabled) {
+            return;
+        }
+
         // Skip processing if config is invalid - show error popup (JIT)
         if (!config.isConfigValid) {
             console.log('Upfly: Config is invalid, skipping auto-conversion. File will be pasted normally.');
             config.showConfigErrors();
+            return;
+        }
+
+        // --- Safety check to prevent breaking code on git pull ---
+        // If the file is tracked by git (e.g., pulled from a remote), we should NOT 
+        // auto-convert it because changing its extension would break existing code references.
+        // We only want to auto-convert newly pasted/dropped (untracked) files.
+        const { GitService } = await import('./GitService');
+        const isGitTracked = await GitService.isTracked(filePath);
+        if (isGitTracked) {
+            console.log(`Upfly: Skipping git-tracked file: ${path.basename(filePath)}`);
             return;
         }
 
@@ -241,10 +258,10 @@ export class WatcherService {
                     await ConverterService.convertFile(filePath, {
                         format,
                         quality,
-                        storageMode: config.get('storageMode'),
-                        outputDirectory: config.get('outputDirectory'),
-                        originalDirectory: config.get('originalDirectory'),
-                        inPlaceKeepOriginal: config.get('inPlaceKeepOriginal')
+                        storageMode: config.get('storageMode', filePath),
+                        outputDirectory: config.get('outputDirectory', filePath),
+                        originalDirectory: config.get('originalDirectory', filePath),
+                        inPlaceKeepOriginal: config.get('inPlaceKeepOriginal', filePath)
                     });
                 }
 

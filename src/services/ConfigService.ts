@@ -65,16 +65,17 @@ export class ConfigService {
     private debounceTimer: NodeJS.Timeout | undefined;
 
     public initialize() {
-        // Watch for upfly.config.json changes in the workspace root
+        // Watch for upfly.config.json changes anywhere in the workspace
         if (vscode.workspace.workspaceFolders) {
-            const pattern = new vscode.RelativePattern(vscode.workspace.workspaceFolders[0], 'upfly.config.json');
+            const pattern = new vscode.RelativePattern(vscode.workspace.workspaceFolders[0], '**/upfly.config.json');
             this.configWatcher = vscode.workspace.createFileSystemWatcher(pattern);
             this.configWatcher.onDidChange(() => this.triggerConfigUpdate());
             this.configWatcher.onDidCreate(() => this.triggerConfigUpdate());
             this.configWatcher.onDidDelete(() => this.triggerConfigUpdate());
         }
         
-        // Build cache and validate on initial load
+        // Discover all configs, build cache and validate on initial load
+        this.discoverAllConfigs();
         this.buildTargetCache();
         this.validateConfig();
     }
@@ -111,16 +112,38 @@ export class ConfigService {
     }
 
     private buildTargetCache() {
-        const config = this.readLocalConfig();
-        // If config exists, use its watchTargets (even if empty)
-        // Only fallback to VS Code settings if no config file
-        const rawTargets = config 
-            ? (config.watchTargets ?? [])  // upfly.config.json exists - use its value (even if empty)
-            : (this.getVSCodeWatchTargets() || DEFAULT_CONFIG.watchTargets); // No config file - use VS Code settings
-        const targets = this.normalizeTargets(rawTargets);
-        
-        // Sort by path length descending (longest/most specific first)
-        this.cachedTargets = [...targets].sort((a, b) => b.path.length - a.path.length);
+        // Build global target cache from ALL discovered configs in the workspace.
+        // This ensures the WatcherService watches folders from every sub-project config.
+        // Per-file resolving still uses findBestConfig for the correct per-file settings.
+        const allTargets: WatchTarget[] = [];
+
+        if (this.discoveredConfigs.length > 0) {
+            for (const configPath of this.discoveredConfigs) {
+                try {
+                    const content = fs.readFileSync(configPath, 'utf8');
+                    const config = parse(content);
+                    if (config?.watchTargets) {
+                        allTargets.push(...this.normalizeTargets(config.watchTargets));
+                    }
+                } catch {}
+            }
+        }
+
+        // If no configs found, fall back to VS Code settings or defaults
+        if (allTargets.length === 0) {
+            const fallback = this.getVSCodeWatchTargets() || DEFAULT_CONFIG.watchTargets;
+            allTargets.push(...this.normalizeTargets(fallback));
+        }
+
+        // Deduplicate by path and sort by length descending (most specific first)
+        const uniquePaths = new Set<string>();
+        this.cachedTargets = allTargets
+            .filter(t => {
+                if (uniquePaths.has(t.path)) return false;
+                uniquePaths.add(t.path);
+                return true;
+            })
+            .sort((a, b) => b.path.length - a.path.length);
     }
 
     private getVSCodeWatchTargets(): any {
@@ -130,9 +153,17 @@ export class ConfigService {
 
     /**
      * Get format and quality for a specific file path.
-     * Uses cached targets for zero config-read overhead.
+     * Looks up the nearest config file, then falls back to defaults.
      */
     public getOptionsForPath(filePath: string): { format: 'webp' | 'png' | 'jpeg' | 'avif', quality: number } {
+        // Instead of cached targets, use nearest config for accuracy in multi-config workspaces
+        const config = this.readLocalConfig(filePath);
+        const rawTargets = config?.watchTargets || this.getVSCodeWatchTargets() || DEFAULT_CONFIG.watchTargets;
+        const targets = this.normalizeTargets(rawTargets);
+        
+        // Sort by path length descending (longest/most specific first)
+        const sortedTargets = [...targets].sort((a, b) => b.path.length - a.path.length);
+
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!workspaceRoot) {
             return { format: 'webp', quality: 80 };
@@ -141,10 +172,9 @@ export class ConfigService {
         // Get relative path and normalize slashes
         const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
 
-        // Find first match (longest path wins because sorted)
-        for (const target of this.cachedTargets) {
+        for (const target of sortedTargets) {
             const normalizedTargetPath = target.path.replace(/\\/g, '/');
-            if (relativePath.startsWith(normalizedTargetPath + '/') || relativePath.startsWith(normalizedTargetPath)) {
+            if (this.pathMatchesTarget(relativePath, normalizedTargetPath)) {
                 return {
                     format: target.format,
                     quality: target.quality ?? 80
@@ -152,8 +182,7 @@ export class ConfigService {
             }
         }
 
-        // Fallback to first target or default
-        const fallback = this.cachedTargets[0] || DEFAULT_WATCH_TARGET;
+        const fallback = sortedTargets[0] || DEFAULT_WATCH_TARGET;
         return { format: fallback.format, quality: fallback.quality ?? 80 };
     }
 
@@ -175,9 +204,10 @@ export class ConfigService {
         const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
 
         // Check if path matches any cloudUpload.watchTargets
+        // Match at any depth to be consistent with watcher glob pattern
         for (const target of cloudConfig.watchTargets) {
             const normalizedTarget = target.replace(/\\/g, '/');
-            if (relativePath.startsWith(normalizedTarget + '/') || relativePath === normalizedTarget || relativePath.startsWith(normalizedTarget)) {
+            if (this.pathMatchesTarget(relativePath, normalizedTarget)) {
                 return true;
             }
         }
@@ -193,15 +223,39 @@ export class ConfigService {
         if (!workspaceRoot) return false;
 
         const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
-        
+                
         // Check if path matches any root watchTargets
+        // Match at any depth to be consistent with watcher glob pattern **/target/**/*
         for (const target of this.cachedTargets) {
             const normalizedTarget = target.path.replace(/\\/g, '/');
-            if (relativePath.startsWith(normalizedTarget + '/') || relativePath === normalizedTarget || relativePath.startsWith(normalizedTarget)) {
+            if (this.pathMatchesTarget(relativePath, normalizedTarget)) {
                 return true;
             }
         }
 
+        return false;
+    }
+
+    /**
+     * Check if a relative file path falls under a watch target directory.
+     * Matches the target as a path segment at any depth, consistent with
+     * the watcher glob pattern: ** /target/** /*.ext
+     * 
+     * Examples:
+     *   pathMatchesTarget('public/img.jpg', 'public') → true
+     *   pathMatchesTarget('project/public/img.jpg', 'public') → true  
+     *   pathMatchesTarget('assets/images/photo.png', 'assets') → true
+     *   pathMatchesTarget('not-public/img.jpg', 'public') → false
+     */
+    private pathMatchesTarget(relativePath: string, target: string): boolean {
+        // Direct prefix match (target is at workspace root level)
+        if (relativePath.startsWith(target + '/') || relativePath === target) {
+            return true;
+        }
+        // Target appears as a path segment deeper in the tree
+        if (relativePath.includes('/' + target + '/') || relativePath.endsWith('/' + target)) {
+            return true;
+        }
         return false;
     }
 
@@ -309,24 +363,28 @@ export class ConfigService {
         }
         this.debounceTimer = setTimeout(() => {
             console.log('Upfly: Config changed (debounced), validating and reloading...');
+            this.discoverAllConfigs(); // Re-scan for config files
             this.buildTargetCache(); // Rebuild cache on config change
             this.validateConfig();
             this._onDidChangeConfig.fire();
         }, 500);
     }
 
-    public get<T>(key: keyof UpflyConfig): T {
-        // 1. Try upfly.config.json
-        const jsonConfig = this.readLocalConfig();
+    public get<T>(key: keyof UpflyConfig, filePath?: string): T {
+        // 1. Try upfly.config.json (nearest to filePath if provided)
+        const jsonConfig = this.readLocalConfig(filePath);
         if (jsonConfig && jsonConfig[key] !== undefined) {
             return jsonConfig[key] as T;
         }
 
-        // 2. Fallback to VS Code Settings
-        const vscodeConfig = vscode.workspace.getConfiguration('upfly');
-        const value = vscodeConfig.get<T>(key);
-        if (value !== undefined) {
-            return value;
+        // 2. Fallback to VS Code Settings (only if explicitly enabled to prevent unexpected global behavior)
+        const useGlobal = vscode.workspace.getConfiguration('upfly').get<boolean>('useGlobalSettings', false);
+        if (useGlobal) {
+            const vscodeConfig = vscode.workspace.getConfiguration('upfly');
+            const value = vscodeConfig.get<T>(key);
+            if (value !== undefined) {
+                return value;
+            }
         }
 
         // 3. Fallback to default
@@ -336,11 +394,136 @@ export class ConfigService {
         return undefined as unknown as T;
     }
 
-    private readLocalConfig(): Partial<UpflyConfig> | null {
+    public hasLocalConfig(): boolean {
+        if (!vscode.workspace.workspaceFolders) return false;
+        
+        // Quick check: does any upfly.config.json exist in the workspace?
+        const rootPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+        
+        // Check root first (fastest)
+        if (fs.existsSync(path.join(rootPath, 'upfly.config.json'))) return true;
+        
+        // Scan for sub configs (depth 1 to avoid massive delay)
+        try {
+            const entries = fs.readdirSync(rootPath, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.isDirectory() && !entry.name.startsWith('.')) {
+                    if (fs.existsSync(path.join(rootPath, entry.name, 'upfly.config.json'))) {
+                        return true;
+                    }
+                }
+            }
+        } catch (e) {}
+        
+        return false;
+    }
+
+    // Cache of all discovered config file paths in the workspace
+    private discoveredConfigs: string[] = [];
+
+    /**
+     * Scan the workspace to discover all upfly.config.json files.
+     * Called on initialization and when configs are created/deleted.
+     */
+    private discoverAllConfigs() {
+        this.discoveredConfigs = [];
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) return;
+
+        this.scanForConfigs(workspaceRoot, 0);
+    }
+
+    private scanForConfigs(dir: string, depth: number) {
+        if (depth > 5) return; // Don't scan too deep
+        try {
+            const configPath = path.join(dir, 'upfly.config.json');
+            if (fs.existsSync(configPath)) {
+                this.discoveredConfigs.push(configPath);
+            }
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules' && entry.name !== 'dist' && entry.name !== 'build') {
+                    this.scanForConfigs(path.join(dir, entry.name), depth + 1);
+                }
+            }
+        } catch {}
+    }
+
+    /**
+     * Find the best config for a given file path.
+     * 
+     * Strategy:
+     * 1. Walk up from the file's directory looking for an ancestor config (direct parent match)
+     * 2. If no ancestor config, find the config whose directory is the closest common parent
+     *    (e.g. config in /project/frontend/ applies to /project/public/ because they share /project/)
+     * 3. Fall back to root config if exists
+     */
+    private findBestConfig(filePath: string): string | null {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) return null;
+
+        // 1. Direct ancestor lookup (walk up from file's directory)
+        let dir = path.dirname(filePath);
+        while (dir.length >= workspaceRoot.length) {
+            const configPath = path.join(dir, 'upfly.config.json');
+            if (fs.existsSync(configPath)) return configPath;
+            const parent = path.dirname(dir);
+            if (parent === dir) break;
+            dir = parent;
+        }
+
+        // 2. If no ancestor config, find the closest discovered config
+        //    by finding the one that shares the longest common path with the file
+        if (this.discoveredConfigs.length > 0) {
+            const fileDir = path.dirname(filePath).toLowerCase();
+            let bestConfig: string | null = null;
+            let bestCommonLength = -1;
+
+            for (const configPath of this.discoveredConfigs) {
+                const configDir = path.dirname(configPath).toLowerCase();
+                // Find common prefix length
+                const commonDir = this.getCommonParent(fileDir, configDir);
+                if (commonDir.length > bestCommonLength) {
+                    bestCommonLength = commonDir.length;
+                    bestConfig = configPath;
+                }
+            }
+            
+            if (bestConfig) return bestConfig;
+        }
+
+        return null;
+    }
+
+    /**
+     * Get the common parent directory of two paths
+     */
+    private getCommonParent(path1: string, path2: string): string {
+        const parts1 = path1.replace(/\\/g, '/').split('/');
+        const parts2 = path2.replace(/\\/g, '/').split('/');
+        const common: string[] = [];
+        for (let i = 0; i < Math.min(parts1.length, parts2.length); i++) {
+            if (parts1[i] === parts2[i]) {
+                common.push(parts1[i]);
+            } else {
+                break;
+            }
+        }
+        return common.join('/');
+    }
+
+    private readLocalConfig(filePath?: string): Partial<UpflyConfig> | null {
         if (!vscode.workspace.workspaceFolders) return null;
         
         const rootPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
-        const configPath = path.join(rootPath, 'upfly.config.json');
+        
+        // If a file path is provided, find the best matching config
+        let configPath = filePath ? this.findBestConfig(filePath) : path.join(rootPath, 'upfly.config.json');
+        
+        // If not found via nearest ancestor (or no filePath), check root
+        if (!configPath || !fs.existsSync(configPath)) {
+            configPath = path.join(rootPath, 'upfly.config.json');
+        }
 
         if (fs.existsSync(configPath)) {
             try {
@@ -529,18 +712,60 @@ export class ConfigService {
         });
     }
 
+    private detectSubProjects(rootPath: string): string[] {
+        try {
+            const entries = fs.readdirSync(rootPath, { withFileTypes: true });
+            return entries
+                .filter(e => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules')
+                .map(e => path.join(rootPath, e.name))
+                .filter(dir => 
+                    fs.existsSync(path.join(dir, 'package.json')) ||
+                    fs.existsSync(path.join(dir, 'composer.json')) ||
+                    fs.existsSync(path.join(dir, 'Cargo.toml')) ||
+                    fs.existsSync(path.join(dir, 'pom.xml')) ||
+                    fs.existsSync(path.join(dir, 'go.mod'))
+                );
+        } catch {
+            return [];
+        }
+    }
+
     public async createConfigFile() {
         if (!vscode.workspace.workspaceFolders) {
             vscode.window.showErrorMessage('Upfly: Open a folder to create a config file.');
             return;
         }
 
-        const rootPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
-        const configPath = path.join(rootPath, 'upfly.config.json');
-
-        if (fs.existsSync(configPath)) {
-            vscode.window.showInformationMessage('Upfly: upfly.config.json already exists.');
-            return;
+        let targetDirs: string[] = [];
+        
+        if (vscode.workspace.workspaceFolders.length > 1) {
+            // Multi-root workspace default VS Code picker
+            const picked = await vscode.window.showWorkspaceFolderPick({
+                placeHolder: 'Select folder for upfly.config.json'
+            });
+            if (!picked) return;
+            targetDirs.push(picked.uri.fsPath);
+        } else {
+            // Single root — scan for sub-projects
+            const rootPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+            const subProjects = this.detectSubProjects(rootPath);
+            
+            if (subProjects.length > 0) {
+                const items: vscode.QuickPickItem[] = [
+                    { label: `$(folder) ${path.basename(rootPath)} (Workspace Root)`, description: rootPath },
+                    ...subProjects.map(sp => ({ label: `$(briefcase) ${path.basename(sp)}`, description: sp }))
+                ];
+                
+                const picked = await vscode.window.showQuickPick(items, {
+                    placeHolder: 'Where should the config be created?',
+                    canPickMany: true
+                });
+                
+                if (!picked || picked.length === 0) return;
+                targetDirs = picked.map(p => p.description!);
+            } else {
+                targetDirs.push(rootPath);
+            }
         }
 
         const configTemplate = `{
@@ -561,8 +786,10 @@ export class ConfigService {
   "inPlaceKeepOriginal": false,     // When true, keeps original alongside converted file
 
   "outputDirectory": "./converted",       // Used and applicable only with "separate-output" mode
-  "originalDirectory": "./originals",     // Usedand applicable only with "separate-original" mode
+  "originalDirectory": "./originals",     // Used and applicable only with "separate-original" mode
 
+  // TIP: For global settings that apply to ALL projects, delete this file and use 
+  // VS Code User Settings (Command Palette -> "Upfly: Open Global Settings") instead.
   
   // --- Cloud Upload (optional) ---
   // Automatically upload converted images to cloud storage
@@ -570,7 +797,7 @@ export class ConfigService {
   
   // "cloudUpload": {
   //   "enabled": true,
-  //   "watchTargets": ["public"],    // Folders to upload (If same directory doesn;t exist in the root watchTargets, it will not go through conversion and upload the original file)
+  //   "watchTargets": ["public"],    // Folders to upload (If same directory doesn't exist in the root watchTargets, it will not go through conversion and upload the original file)
   //   "provider": "cloudinary",
   //   "config": {
   //     "cloudName": "\${env:CLOUDINARY_CLOUD_NAME}",
@@ -585,13 +812,22 @@ export class ConfigService {
 }
 `;
 
-        try {
-            fs.writeFileSync(configPath, configTemplate);
-            const doc = await vscode.workspace.openTextDocument(configPath);
-            await vscode.window.showTextDocument(doc);
-            vscode.window.showInformationMessage('Upfly: Created upfly.config.json');
-        } catch (e: any) {
-            vscode.window.showErrorMessage(`Upfly: Failed to create config file. ${e.message}`);
+        for (const targetDir of targetDirs) {
+            const configPath = path.join(targetDir, 'upfly.config.json');
+
+            if (fs.existsSync(configPath)) {
+                vscode.window.showInformationMessage(`Upfly: config already exists in ${path.basename(targetDir)}`);
+                continue;
+            }
+
+            try {
+                fs.writeFileSync(configPath, configTemplate);
+                const doc = await vscode.workspace.openTextDocument(configPath);
+                await vscode.window.showTextDocument(doc, { preview: false });
+                vscode.window.showInformationMessage(`Upfly: Created upfly.config.json in ${path.basename(targetDir)}`);
+            } catch (e: any) {
+                vscode.window.showErrorMessage(`Upfly: Failed to create config file. ${e.message}`);
+            }
         }
     }
     

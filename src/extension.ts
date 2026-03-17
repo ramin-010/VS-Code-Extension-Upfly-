@@ -43,10 +43,10 @@ async function convertFiles(uris: vscode.Uri[], formatOverride?: ImageFormat, is
             await ConverterService.convertFile(filePath, {
                 format: format,
                 quality: quality,
-                storageMode: forceInPlace ? 'in-place' : config.get('storageMode'),
-                outputDirectory: config.get('outputDirectory'),
-                originalDirectory: config.get('originalDirectory'),
-                inPlaceKeepOriginal: forceInPlace ? true : config.get('inPlaceKeepOriginal'),
+                storageMode: forceInPlace ? 'in-place' : config.get('storageMode', filePath),
+                outputDirectory: config.get('outputDirectory', filePath),
+                originalDirectory: config.get('originalDirectory', filePath),
+                inPlaceKeepOriginal: forceInPlace ? true : config.get('inPlaceKeepOriginal', filePath),
                 isCompression: isCompression
             });
         });
@@ -109,6 +109,10 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    const openSettingsCmd = vscode.commands.registerCommand('upfly.openSettings', () => {
+        vscode.commands.executeCommand('workbench.action.openSettings', 'upfly');
+    });
+
     context.subscriptions.push(configService.onDidChangeConfig(() => {
         console.log('Upfly: Config changed, reloading watcher...');
         watcherService.initialize();
@@ -127,21 +131,28 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(convertToJpeg);
     context.subscriptions.push(convertToPng);
     context.subscriptions.push(compressCmd);
+    context.subscriptions.push(openSettingsCmd);
     context.subscriptions.push({ dispose: () => watcherService.dispose() });
     context.subscriptions.push({ dispose: () => configService.dispose() });
 
     // Show Welcome Message on First Install
     const hasShownWelcome = context.globalState.get<boolean>('upfly.hasShownWelcome', false);
-    if (!hasShownWelcome) {
+    const configAlreadyExists = configService.hasLocalConfig();
+    
+    if (!hasShownWelcome && !configAlreadyExists) {
         vscode.window.showInformationMessage(
-            'Welcome to Upfly! 🚀 Would you like to create a configuration file to customize your image processing?',
+            'Welcome to Upfly! 🚀 Create a config file to customize image processing, or use VS Code Settings (Ctrl+,) for global defaults.',
             'Create Config',
             'Later'
         ).then(selection => {
             if (selection === 'Create Config') {
                 vscode.commands.executeCommand('upfly.init');
+                context.globalState.update('upfly.hasShownWelcome', true);
+            } else if (selection === 'Later') {
+                context.globalState.update('upfly.hasShownWelcome', true);
             }
-            context.globalState.update('upfly.hasShownWelcome', true);
+            // If dismissed (undefined), we do NOT mark it as shown,
+            // so it will appear again on the next activation.
         });
     }
 }
