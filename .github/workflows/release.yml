@@ -111,10 +111,26 @@ jobs:
       - name: Package VSIX
         run: npx --yes @vscode/vsce@latest package --target ${{ matrix.target }} --out "upfly-vscode-${{ matrix.target }}.vsix"
 
-      - name: Confirm VSIX contains only the target binary
+      - name: Confirm the VSIX is complete and carries only the target binary
         run: |
-          npx --yes @vscode/vsce@latest ls --tree 2>/dev/null | head -40 || true
-          unzip -l "upfly-vscode-${{ matrix.target }}.vsix" | grep -o 'extension/node_modules/@img/[^/]*' | sort -u
+          contents="$(unzip -l "upfly-vscode-${{ matrix.target }}.vsix")"
+          echo "Native binaries in the package:"
+          echo "$contents" | grep -o 'extension/node_modules/@img/[^/]*' | sort -u
+
+          # The bundle marks these as external, so they must ship as real files.
+          # Without this check a missing dep builds fine and fails at runtime.
+          for required in \
+            "extension/dist/extension.js" \
+            "extension/node_modules/sharp/package.json" \
+            "extension/node_modules/file-type/package.json" \
+            "extension/node_modules/jsonc-parser/package.json" \
+            "extension/node_modules/@img/sharp-${{ matrix.img_pkg }}"; do
+            if ! echo "$contents" | grep -q "$required"; then
+              echo "::error::VSIX for ${{ matrix.target }} is missing $required"
+              exit 1
+            fi
+          done
+          echo "VSIX contents verified for ${{ matrix.target }}."
 
       - uses: actions/upload-artifact@v4
         with:

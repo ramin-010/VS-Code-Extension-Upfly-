@@ -193,12 +193,12 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
-    "compile": "npm run check-types && node node_modules/esbuild/bin/esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --external:sharp --external:file-type --external:jsonc-parser --sourcemap --outfile=dist/extension.js",
+    "compile": "npm run check-types && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --external:sharp --external:file-type --external:jsonc-parser --sourcemap --outfile=dist/extension.js",
     "check-types": "tsc --noEmit",
     "watch": "npm-run-all -p watch:*",
-    "watch:esbuild": "node node_modules/esbuild/bin/esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --external:sharp --external:file-type --external:jsonc-parser --sourcemap --outfile=dist/extension.js --watch",
+    "watch:esbuild": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --external:sharp --external:file-type --external:jsonc-parser --sourcemap --outfile=dist/extension.js --watch",
     "watch:tsc": "tsc --noEmit --watch",
-    "package": "npm run check-types && node node_modules/esbuild/bin/esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --external:sharp --external:file-type --external:jsonc-parser --minify --outfile=dist/extension.js",
+    "package": "npm run check-types && esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --external:sharp --external:file-type --external:jsonc-parser --minify --outfile=dist/extension.js",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
     "test": "node ./out/test/runTest.js"
