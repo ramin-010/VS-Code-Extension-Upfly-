@@ -1,5 +1,7 @@
 # Upfly - Image Optimizer & Cloud Uploader 🚀
 
+> ⚡ **Did you know?** This is the official VS Code extension for the **[Upfly npm package](https://www.npmjs.com/package/upfly)**, the ultimate Express file handling middleware for Node.js.
+
 **The complete image optimization workflow for VS Code.**  
 Paste, convert, compress, and upload—all without leaving your editor.
 

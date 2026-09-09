@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.5
+
+- **Fixed: the extension now works on macOS and Linux.** Previous releases shipped a single VSIX
+  containing only the Windows native binary for `sharp`, so image conversion failed on every other
+  platform. Releases are now built per platform (win32-x64, darwin-x64, darwin-arm64, linux-x64,
+  linux-arm64, alpine-x64, alpine-arm64) in CI, with a check that fails the build if the wrong
+  binary is bundled.
+- **Security: hardened the git check.** `GitService.isTracked` ran `git` through a shell string that
+  interpolated the file path. A crafted filename in a watched folder could execute arbitrary
+  commands. It now uses `execFile` with an argument array, so no shell is involved.
+- Added the missing `license` field and pinned `sharp` to an exact version.
+
 ## 0.0.3
 
 - **Better Config Support** 📂: Support for workspace-wide config discovery and sub-directory configurations.
