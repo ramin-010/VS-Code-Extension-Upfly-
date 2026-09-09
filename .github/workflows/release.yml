@@ -90,23 +90,40 @@ jobs:
             $LIBC_FLAG \
             sharp@${SHARP_VERSION}
 
+      # npm does not filter optional deps by libc, so installing for linux pulls BOTH the
+      # glibc (@img/sharp-linux-*) and musl (@img/sharp-linuxmusl-*) variants. Shipping both
+      # would add several MB of dead weight to every Linux and Alpine VSIX, so drop whatever
+      # this target does not need. Note win32 has no separate libvips package — libvips is
+      # bundled inside @img/sharp-win32-x64 — so that pattern simply matches nothing there.
+      - name: Prune native binaries for other platforms
+        run: |
+          echo "Before pruning:"; ls -1 node_modules/@img/ || true
+          for d in node_modules/@img/*/; do
+            name="$(basename "$d")"
+            case "$name" in
+              sharp-${{ matrix.img_pkg }}|sharp-libvips-${{ matrix.img_pkg }}) ;;
+              *) echo "  removing $name"; rm -rf "$d" ;;
+            esac
+          done
+          echo "After pruning:"; ls -1 node_modules/@img/ || true
+
       # The guard. v0.0.4 shipped to every platform with only the win32-x64 binary inside;
       # this step makes that failure mode impossible to release silently.
       - name: Verify the correct native binary is present
         run: |
-          echo "Contents of node_modules/@img:"
-          ls -1 node_modules/@img/ || true
           if [ ! -d "node_modules/@img/sharp-${{ matrix.img_pkg }}" ]; then
             echo "::error::Expected node_modules/@img/sharp-${{ matrix.img_pkg }} for target ${{ matrix.target }}, but it is missing."
             exit 1
           fi
-          for d in node_modules/@img/sharp-*; do
+          for d in node_modules/@img/*/; do
             name="$(basename "$d")"
             case "$name" in
-              sharp-${{ matrix.img_pkg }}|sharp-libvips-*) ;;
-              *) echo "::error::Unexpected foreign binary in bundle: $name"; exit 1 ;;
+              sharp-${{ matrix.img_pkg }}|sharp-libvips-${{ matrix.img_pkg }}) ;;
+              *) echo "::error::Foreign binary survived pruning: $name"; exit 1 ;;
             esac
           done
+          echo "Native binaries verified for ${{ matrix.target }}:"
+          du -sh node_modules/@img/* 2>/dev/null || ls -1 node_modules/@img/
 
       - name: Package VSIX
         run: npx --yes @vscode/vsce@latest package --target ${{ matrix.target }} --out "upfly-vscode-${{ matrix.target }}.vsix"
